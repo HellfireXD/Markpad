@@ -2289,8 +2289,9 @@ import { createDocumentSession, type LoadMarkdownOptions } from './sessions/docu
 
 	function removeRecentFile(path: string, event: MouseEvent) {
 		event.stopPropagation();
+		// Forgets the entry, not the document: an open tab stays open, the way
+		// "Remove from Recently Opened" works in VS Code.
 		deleteRecentFile(path);
-		if (currentFile === path) tabManager.closeTab(tabManager.activeTabId!);
 	}
 
 	async function canCloseTab(tabId: string): Promise<boolean> {
@@ -3558,6 +3559,9 @@ import { createDocumentSession, type LoadMarkdownOptions } from './sessions/docu
 				return void toggleLiveMode();
 			case 'toggle-zen-mode':
 				return settings.toggleZenMode();
+			case 'toggle-tabs':
+				settings.showTabs = !settings.showTabs;
+				return;
 			case 'toggle-edit-view':
 				return void toggleEditView();
 			case 'save-as':
@@ -3645,9 +3649,6 @@ import { createDocumentSession, type LoadMarkdownOptions } from './sessions/docu
 				return void exportAsHtml();
 			case 'toggle-toc':
 				settings.showToc = !settings.showToc;
-				return;
-			case 'toggle-tabs':
-				settings.showTabs = !settings.showTabs;
 				return;
 			case 'toggle-editor-toolbar':
 				settings.showEditorToolbar = !settings.showEditorToolbar;
@@ -4340,20 +4341,8 @@ import { createDocumentSession, type LoadMarkdownOptions } from './sessions/docu
 								value={tabManager.activeTab.rawContent}
 								language={editorLanguage}
 								theme={settings.theme}
-								onsave={saveContent}
 								zoomLevel={settings.zoomLevel}
-								onnew={handleNewFile}
-								onopen={selectFile}
-								onclose={closeFile}
-								onreveal={openFileLocation}
-								onexportPdf={exportAsPdf}
-								ontoggleEdit={() => toggleEditView()}
-								ontoggleLive={toggleLiveMode}
-								ontoggleSplit={() => tabManager.activeTabId && toggleSplitView(tabManager.activeTabId)}
-								onhome={toggleHome}
-								onnextTab={() => tabManager.cycleTab('next')}
-								onprevTab={() => tabManager.cycleTab('prev')}
-								onundoClose={handleUndoCloseTab}
+								oncommand={runViewerCommand}
 								onscrollsync={handleEditorScrollSync}
 								oncursor={handleEditorCursor}
 								sharedCursor={settings.previewCursor ? activeCursor : null} />
