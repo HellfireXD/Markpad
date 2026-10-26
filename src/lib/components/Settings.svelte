@@ -1623,6 +1623,17 @@
 						</div>
 
 						<div class="setting-item">
+							<label for="files-open-file-target">{t('settings.openFileTarget', settings.language)}</label>
+							<div class="select-wrapper">
+								<select id="files-open-file-target" bind:value={settings.openFileTarget}>
+									<option value="lastWindow">{t('settings.openFileTargetLastWindow', settings.language)}</option>
+									<option value="ask">{t('settings.openFileTargetAsk', settings.language)}</option>
+								</select>
+								<svg class="select-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+							</div>
+						</div>
+
+						<div class="setting-item">
 							<label for="files-new-file-mode">{t('settings.newFileDefaultMode', settings.language)}</label>
 							<label class="toggle">
 								<input id="files-new-file-mode" type="checkbox" bind:checked={settings.newFileDefaultMode} />
