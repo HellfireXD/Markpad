@@ -1,13 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { parse } from 'svelte/compiler';
-
 import { fontFamilyValue } from '../src/lib/utils/fontFamily.js';
 import { getSupportedLanguages, type LanguageCode, t, type Translation } from '../src/lib/utils/i18n.js';
-import { isSafeCssColor, sanitizeThemeColors } from '../src/lib/utils/theme.js';
 import { translations } from './allTranslations.js';
-import { functionSource, readSource, walkSourceFiles } from './sourceTree.js';
+import { readSource, walkSourceFiles } from './sourceTree.js';
 
 /**
  * Settings whose label did not describe what the code did.
@@ -35,13 +32,11 @@ import { functionSource, readSource, walkSourceFiles } from './sourceTree.js';
  *
  * The first is a behaviour change and is tested as one. The other two are the
  * UI admitting a dependency that was always there, so what is pinned is the
- * gate, plus the layout rule that the prerequisite is the row above.
+ * gate, plus the layout rule that the prerequisite is the row above. Both run
+ * on the pane data: settings.spec.ts "settings panes".
  */
 describe('merged auto-save preference', () => {
 	const settingsSource = readSource(new URL('../src/lib/stores/settings.svelte.ts', import.meta.url));
-	const settingsComponentSource = readSource(new URL('../src/lib/components/Settings.svelte', import.meta.url));
-	const viewerSource = readSource(new URL('../src/lib/MarkdownViewer.svelte', import.meta.url));
-	const sessionSource = readSource(new URL('../src/lib/sessions/documentSession.svelte.ts', import.meta.url));
 
 	test('the merged preference is stored under its own key, and the old ones are read-only', () => {
 		assert.match(settingsSource, /key: 'editor\.autoSaveEdits'/);
@@ -51,75 +46,16 @@ describe('merged auto-save preference', () => {
 		assert.doesNotMatch(settingsSource, /key: 'editor\.autoSave'/);
 		assert.doesNotMatch(settingsSource, /key: 'editor\.confirmBeforeSave'/);
 	});
-
-	test('nothing evaluates the pair any more', () => {
-		// Four sites read `autoSave && !confirmBeforeSave`; a survivor would be a
-		// path that still consults a preference no UI can set.
-		for (const source of [viewerSource, sessionSource, settingsComponentSource, settingsSource]) {
-			assert.doesNotMatch(source, /settings\.confirmBeforeSave/);
-		}
-		// And the four decisions are still there, now reading the one switch.
-		assert.match(viewerSource, /if \(!settings\.autoSave\) return;/); // leaving an editable pane
-		assert.match(viewerSource, /if \(!settings\.autoSave\) \{/); // the debounce
-		assert.match(viewerSource, /if \(settings\.autoSave\) \{/); // the close-window walk
-		// Closing a tab. The condition grew a third term — a file that changed
-		// under the buffer is a question for the user, not something auto-save may
-		// answer by writing — but it is still this one switch that decides whether
-		// the silent save happens at all.
-		assert.match(sessionSource, /if \(settings\.autoSave && tab\.path !== '' && !diskMoved\)/);
-	});
-
-	/* ---------------------------------------------- B & C: visible dependency */
-
-	test('the wrap column sits under the wrap mode, and is inert without it', () => {
-		const wrapMode = settingsComponentSource.indexOf('<label for="editor-word-wrap">');
-		const wrapColumn = settingsComponentSource.indexOf('<label for="editor-max-width">');
-		assert.ok(wrapMode > 0 && wrapColumn > 0);
-		assert.ok(wrapMode < wrapColumn, 'the prerequisite must be the row above the setting it gates');
-
-		// Monaco reads `wordWrapColumn` only in this mode — `Editor.svelte` passes
-		// the value unconditionally, and Monaco ignores it in the other two.
-		const gate = /settings\.wordWrap !== 'wordWrapColumn'/g;
-		assert.equal((settingsComponentSource.match(gate) ?? []).length, 4, 'the row, its input and both steppers');
-	});
-
-	test('the word count is greyed out when there is no status bar to show it in', () => {
-		assert.match(settingsComponentSource, /class:inactive=\{!settings\.statusBar\}/);
-		assert.match(
-			settingsComponentSource,
-			/id="editor-word-count"[^>]*disabled=\{!settings\.statusBar\}/,
-		);
-		const statusBar = settingsComponentSource.indexOf('<label for="editor-status-bar">');
-		const wordCount = settingsComponentSource.indexOf('<label for="editor-word-count">');
-		assert.ok(statusBar > 0 && statusBar < wordCount, 'same rule: the prerequisite is the row above');
-	});
-
-	test('an inactive row is dimmed rather than hidden', () => {
-		// Hiding it would answer "where did that setting go?" with nothing.
-		assert.match(settingsComponentSource, /\.setting-item\.inactive[\s\S]{0,200}?opacity: 0\.45/);
-	});
-
-
-	/* ------------------------------------------------ D: last tab (#829) */
-
-	test('closing the last tab leaves the window on Home when the setting is off', () => {
-		const body = functionSource(viewerSource, 'closeTabAndWindowIfLast');
-		assert.match(body, /if \(settings\.closeWindowWithLastTab\) await destroyWindowAfterTabsClosed\(\);/);
-		assert.equal(body.match(/destroyWindowAfterTabsClosed\(/g)?.length, 1, 'no ungated destroy');
-	});
 });
 
 describe('font family values', () => {
 	const viewerSource = readSource(new URL('../src/lib/MarkdownViewer.svelte', import.meta.url));
 	const editorOptionsSource = readSource(new URL('../src/lib/utils/editorOptions.ts', import.meta.url));
 
-	test('every place a chosen family reaches CSS goes through the one helper', () => {
-		assert.match(viewerSource, /fontFamily: fontFamilyValue\(settings\.previewFont, 'sans-serif'\),/);
-		assert.match(viewerSource, /codeFontFamily: fontFamilyValue\(settings\.codeFont, 'monospace'\),/);
-		assert.match(editorOptionsSource, /fontFamily: fontFamilyValue\(settings\.editorFont, "monospace"\),/);
-		// The absence claim is the point of this one: a second bare interpolation of
-		// a font preference is the defect returning, and it cannot be observed by
-		// running the helper that does exist.
+	test('no font preference reaches CSS bare', () => {
+		// The values are settings.test.ts "a chosen family reaches the preview, its
+		// code and the editor quoted". This is the absence claim: a second bare
+		// interpolation of a font preference is the defect returning.
 		assert.doesNotMatch(viewerSource, /font-family: \{settings\./);
 		assert.doesNotMatch(viewerSource, /--code-font: \{settings\./);
 		assert.doesNotMatch(editorOptionsSource, /fontFamily: settings\./);
@@ -127,15 +63,11 @@ describe('font family values', () => {
 });
 
 describe('theme CSS validation', () => {
-	test('[P1-C-3] the injected style tag is built only from validated values', () => {
+	// The validation itself is run in settings.themeLoad.spec.ts. What stays here is
+	// the convention that the tag is never assigned as markup (lint-candidate).
+	test('the theme style tag is filled as text, never as markup', () => {
 		const source = readSource('src/lib/utils/theme.ts');
 
-		assert.match(source, /const colors = sanitizeThemeColors\(theme\.colors\)/);
-		assert.match(
-			source,
-			/\.filter\(\(\[, v\]\) => isSafeCssColor\(v\)\)/,
-			'the final interpolation must re-check each value',
-		);
 		assert.doesNotMatch(
 			source,
 			/styleTag\.innerHTML\s*=/,
@@ -385,6 +317,14 @@ describe('translation coverage', () => {
 		'src/lib/components/Settings.svelte: t(action.labelKey)',
 		'src/lib/components/Settings.svelte: t(entry.hintKey)',
 		'src/lib/components/Settings.svelte: t(entry.labelKey)',
+		// The pane rows and their select options (src/lib/utils/settingsPanes.ts).
+		// `labelKey`/`hintKey` are harvested above; settings.spec.ts "every key a
+		// settings row renders exists in English" checks all of them, titles included.
+		'src/lib/components/Settings.svelte: t(option.labelKey)',
+		'src/lib/components/Settings.svelte: t(row.hintKey)',
+		'src/lib/components/Settings.svelte: t(row.inactiveTitleKey)',
+		'src/lib/components/Settings.svelte: t(row.labelKey)',
+		'src/lib/components/Settings.svelte: t(row.titleKey)',
 		'src/lib/components/Settings.svelte: t(section.labelKey)',
 		'src/lib/components/Settings.svelte: t(tool.labelKey)',
 		'src/lib/components/Tab.svelte: t(action.labelKey)',
@@ -510,136 +450,5 @@ describe('translation coverage', () => {
 				`addToast(${arg}) no longer exists — drop it from UNTRANSLATED_TOASTS`,
 			);
 		}
-	});
-
-	// ------------------------------------------- one label per control, per pane
-	//
-	// The preview pane shipped four controls under two labels. `preview-font` and
-	// `code-font` both read `t('settings.font')`, `preview-font-size` and
-	// `code-font-size` both read `t('settings.fontSize')`, so the pane rendered
-	//
-	//     Font       [ Helvetica Neue (Default) ]
-	//     Font Size  [− 16 +]
-	//     Font       [ Menlo (Default) ]
-	//     Font Size  [− 14 +]
-	//
-	// and nothing on screen said which pair was the prose font and which the code
-	// font. The `id` attributes knew; the user could not.
-	//
-	// Nothing in the suite could see it. Every rule above is about a key existing
-	// and resolving — two controls pointed at the SAME existing, correctly
-	// resolving key satisfies all of them. So this reads the controls out of the
-	// component and compares what a user would actually see, in each language:
-	// two controls in one pane may not render the same words. Spelling the check
-	// against `t()` output rather than against the key names is the point — a
-	// future locale that translates two distinct keys to one string is the same
-	// defect and fails here too.
-
-	const SETTINGS = 'src/lib/components/Settings.svelte';
-
-	type LabelledControl = { pane: string; id: string; key: string };
-
-	/**
-	 * Every `<label for="…">{t('…')}</label>` in Settings.svelte, tagged with the
-	 * `{#if activeCategory === '…'}` branch it renders in.
-	 *
-	 * Read from the parsed component rather than by matching text: the panes are a
-	 * `{:else if}` chain, so "which pane is this row in" is a question about tree
-	 * position that no regex over the file can answer.
-	 */
-	function labelledControls(): LabelledControl[] {
-		const source = readSource(SETTINGS);
-		const ast = parse(source, { modern: true, filename: SETTINGS }) as Record<string, any>;
-		const found: LabelledControl[] = [];
-
-		const visit = (node: unknown, pane: string | null): void => {
-			if (Array.isArray(node)) {
-				for (const child of node) visit(child, pane);
-				return;
-			}
-			if (!node || typeof node !== 'object') return;
-			const current = node as Record<string, any>;
-
-			if (current.type === 'IfBlock' && current.test) {
-				const category = source
-					.slice(current.test.start, current.test.end)
-					.match(/activeCategory === '([a-z]+)'/);
-				if (category) {
-					// The consequent is that pane; the `{:else if}` chain in the
-					// alternate names its own.
-					visit(current.consequent, category[1]);
-					visit(current.alternate, pane);
-					return;
-				}
-			}
-
-			if (current.type === 'RegularElement' && current.name === 'label') {
-				const forAttribute = (current.attributes ?? []).find(
-					(attribute: Record<string, any>) => attribute.type === 'Attribute' && attribute.name === 'for',
-				);
-				const id = forAttribute?.value?.[0]?.type === 'Text' ? String(forAttribute.value[0].data) : null;
-				for (const child of current.fragment?.nodes ?? []) {
-					const call = child.type === 'ExpressionTag' ? child.expression : null;
-					if (call?.type !== 'CallExpression' || call.callee?.name !== 't') continue;
-					const key = call.arguments?.[0];
-					if (key?.type !== 'Literal' || typeof key.value !== 'string') continue;
-					assert.ok(id, `a t() label in ${SETTINGS} has no "for" attribute to name its control`);
-					assert.ok(pane, `${id} is labelled outside any activeCategory branch`);
-					found.push({ pane: pane!, id: id!, key: key.value });
-				}
-			}
-
-			for (const [name, value] of Object.entries(current)) {
-				if (name === 'parent' || name === 'metadata') continue;
-				visit(value, pane);
-			}
-		};
-
-		visit(ast.fragment, null);
-		return found;
-	}
-
-	const settingsControls = labelledControls();
-
-	test('the settings panes were actually read', () => {
-		// Every assertion below is vacuous if the walk found nothing, and the one
-		// that matters is vacuous if it stopped finding the preview pane.
-		const panes = new Set(settingsControls.map((control) => control.pane));
-		assert.deepEqual([...panes].sort(), ['appearance', 'editor', 'files', 'preview']);
-		assert.ok(settingsControls.length > 25, `found ${settingsControls.length} labelled controls`);
-
-		const preview = settingsControls.filter((control) => control.pane === 'preview').map((c) => c.id);
-		assert.deepEqual(preview.sort(), [
-			'code-font',
-			'code-font-size',
-			'preview-annotations',
-			'preview-cursor',
-			'preview-font',
-			'preview-font-size',
-			'preview-max-width',
-			'preview-newline-breaks',
-			'preview-occurrences',
-			'preview-table-breakout',
-			'preview-table-scroll',
-		]);
-	});
-
-	test('no two controls in one settings pane carry the same label, in any language', () => {
-		const collisions: string[] = [];
-
-		for (const pane of new Set(settingsControls.map((control) => control.pane))) {
-			const controls = settingsControls.filter((control) => control.pane === pane);
-			for (const lang of languages) {
-				const seen = new Map<string, string>();
-				for (const { id, key } of controls) {
-					const label = t(key, lang);
-					const owner = seen.get(label);
-					if (owner) collisions.push(`${lang} ${pane}: ${owner} and ${id} both read "${label}"`);
-					else seen.set(label, id);
-				}
-			}
-		}
-
-		assert.deepEqual(collisions, []);
 	});
 });

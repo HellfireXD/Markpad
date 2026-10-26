@@ -674,14 +674,7 @@ describe('one version across the manifests', () => {
 		const pkg = JSON.parse(readSource('package.json'));
 		assert.equal(pkg.scripts.release, 'node scripts/release.mjs');
 
-		// It has to touch all three, or it is a bump that reintroduces the skew.
-		const script = readSource('scripts/release.mjs');
-		for (const file of ['package.json', 'src-tauri/Cargo.toml', 'Cargo.lock']) {
-			assert.ok(script.includes(file), `scripts/release.mjs never mentions ${file}`);
-		}
-		// The lock is cargo's format; a hand-rolled rewrite of it is the bug, not the
-		// fix.
-		assert.match(script, /cargo['"],\s*\['update'/);
+		// That it writes all three is run in release.test.ts.
 
 		// And the runbook points at the command rather than at the two files.
 		assert.match(readSource('RELEASING.md'), /npm run release X\.Y\.Z/);
@@ -935,24 +928,8 @@ describe('NSIS installer hooks', () => {
 
 describe('a package-managed install is not offered an update', () => {
 	const store = readSource('src/lib/stores/update.svelte.ts');
-	const dialog = readSource('src/lib/components/UpdateDialog.svelte');
 	const rust = readRustBackend();
 	const i18n = readDictionarySource();
-
-	test('the updater asks whether it can install before it checks', () => {
-		// The whole defect is a sequence: check first, discover the impossibility
-		// second. Asserting that both calls exist would pass on the broken order,
-		// so the assertion is where they sit relative to each other.
-		const runCheck = sliceBetween(store, 'async runCheck()', 'async startDownload(');
-		const gate = runCheck.indexOf("invoke<boolean>('self_update_supported')");
-		const checkCall = runCheck.indexOf('await check()');
-		assert.ok(gate !== -1, 'runCheck must ask self_update_supported');
-		assert.ok(checkCall !== -1, 'runCheck must still call check() when self-update is possible');
-		assert.ok(
-			gate < checkCall,
-			'self_update_supported must be consulted before check(), or the user is offered an update that cannot be installed',
-		);
-	});
 
 	test('the command exists on the Rust side and is reachable', () => {
 		// A Tauri command is addressed by a string, so nothing in the type system
@@ -963,27 +940,14 @@ describe('a package-managed install is not offered an update', () => {
 		assert.match(handler, /self_update_supported/);
 	});
 
-	test('only Linux is gated', () => {
-		// Windows runs the downloaded NSIS installer rather than overwriting
-		// anything in place, and macOS is the one platform where bundle_type()
-		// answers without the build-time patch. Gating either would break a working
-		// updater for 95% of downloads.
-		const command = sliceBetween(rust, 'fn self_update_supported', '\npub fn get_os_type');
-		assert.match(command, /#\[cfg\(target_os = "linux"\)\]/);
-		assert.match(command, /appimage\.is_some\(\)/);
-		assert.match(command, /#\[cfg\(not\(target_os = "linux"\)\)\]/);
-		// Read through tauri's Env, which also verifies the executable is under
+	test('the AppImage is detected through tauri\'s Env, not a raw variable', () => {
+		// Which platforms are gated is `only_linux_gates_self_update` in
+		// commands.rs. What stays here is the convention that the AppImage is
+		// read through tauri's Env, which also verifies the executable is under
 		// $TMPDIR/.mount_. `std::env::var("APPIMAGE")` alone is settable by hand.
+		const command = sliceBetween(rust, 'fn self_update_supported', '\npub fn get_os_type');
+		assert.match(command, /appimage\.is_some\(\)/);
 		assert.doesNotMatch(command, /env::var/);
-	});
-
-	test('the dialog can render the phase, and can be dismissed from it', () => {
-		// A phase the store can enter but the dialog cannot draw is a blank modal
-		// with no way out — the footer branch matters as much as the body one.
-		assert.match(dialog, /packageManagedHeader/);
-		assert.match(dialog, /packageManagedBody/);
-		const footer = sliceBetween(dialog, '<div class="update-footer">', '</div>\n\t\t</div>');
-		assert.match(footer, /phase === 'package-managed'/);
 	});
 
 	test('the new strings are translated wherever the rest of this dialog is', () => {
@@ -1000,30 +964,6 @@ describe('a package-managed install is not offered an update', () => {
 				`${key} must be defined in the same languages as ${dialogKey}`,
 			);
 		}
-	});
-});
-
-describe('the update dialog', () => {
-	const dialog = readSource('src/lib/components/UpdateDialog.svelte');
-	const globalStyles = readSource('src/styles.css');
-
-	test('release notes can be selected even though the app disables selection', () => {
-		// The app root sets `user-select: none` on purpose. Anything that holds text
-		// a user has to copy out has to say so for itself — nothing else in this
-		// component does, so a rule that quietly went missing here would look like
-		// no rule at all, which is what #532 reported.
-		assert.match(globalStyles, /user-select: none/);
-
-		const notesRule = /\.notes pre \{[^}]*\}/.exec(dialog)?.[0];
-		assert.ok(notesRule, 'the release-notes block must still have its own style rule');
-		assert.match(notesRule, /user-select: text/);
-		assert.match(notesRule, /-webkit-user-select: text/);
-	});
-
-	test('the dialog promises reopened tabs only when restore is on', () => {
-		// With "Restore windows on launch" off nothing writes the snapshot, so the
-		// relaunched app opens empty and must not have been told otherwise.
-		assert.match(dialog, /\{#if settings\.restoreStateOnReopen\}<p>\{tk\('reopensTabs'\)\}<\/p>\{\/if\}/);
 	});
 });
 
@@ -1208,7 +1148,7 @@ describe('single implementations', () => {
 		{
 			name: 'the list-marker grammar has one implementation in src',
 			why:
-				"\"What a list item's marker looks like\" had three spellings: the Rust renderer's TASK_SOURCE_RE, the preview's checkbox rewrite in documentSession.svelte.ts, and the toolbar's line-marker toggles. The first two agreed; the toolbar's copy accepted neither an indented item nor the `1)` delimiter, so a click on a nested bullet answered `-     - sub` and a click on `1) item` answered `- 1) item` — issue #451 verbatim, one delimiter over. utils/listSyntax.ts holds the vocabulary now. What each site wraps around it — the anchors, the separator, and whether the leading indentation is consumed or preserved — stays at the call site on purpose: the renderer throws that prefix away, the toolbar has to put it back, and sharing *that* would flatten every nested list item on the first click. The Rust copy is pinned against this one by taskToggleLineEndings.test.ts, because no import crosses that boundary.",
+				"\"What a list item's marker looks like\" had three spellings: the Rust renderer's TASK_SOURCE_RE, the preview's checkbox rewrite in documentSession.svelte.ts, and the toolbar's line-marker toggles. The first two agreed; the toolbar's copy accepted neither an indented item nor the `1)` delimiter, so a click on a nested bullet answered `-     - sub` and a click on `1) item` answered `- 1) item` — issue #451 verbatim, one delimiter over. utils/listSyntax.ts holds the vocabulary now. What each site wraps around it — the anchors, the separator, and whether the leading indentation is consumed or preserved — stays at the call site on purpose: the renderer throws that prefix away, the toolbar has to put it back, and sharing *that* would flatten every nested list item on the first click. The Rust copy is pinned against this one by documents.checks.test.ts \"task toggle line endings\", because no import crosses that boundary.",
 			// The two fragments distinctive enough that prose cannot match them: the
 			// task box's character class and the ordered delimiter pair.
 			marker: /\[ xX\]|\\d\+\[\.\)\]/g,

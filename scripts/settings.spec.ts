@@ -5,6 +5,7 @@ import { afterAll, describe, onTestFinished, test } from 'vitest';
 
 import { getSupportedLanguages } from '../src/lib/utils/i18n.js';
 import { translations } from './allTranslations.js';
+import { updatedEditorOptions } from '../src/lib/utils/editorOptions.js';
 
 // Plain TypeScript, no runes: safe to import statically, unlike the store below.
 describe('settings persistence', async () => {
@@ -248,6 +249,25 @@ describe('settings persistence', async () => {
 		const restarted = createStore();
 		assert.equal(restarted.editorFontSize, 30);
 		assert.equal(restarted.language, 'ja');
+	});
+
+	test('the store has no single effect that writes every key', () => {
+		// The same two windows as above, but through the store's own effects. One
+		// effect reading every field would rewrite font size from B's stale copy the
+		// moment B touched anything. (A same-document write fires no storage event,
+		// so B really is unaware here.)
+		resetStorage();
+		const windowA = createStore();
+		const windowB = createStore();
+		flushSync();
+
+		windowA.editorFontSize = 30;
+		flushSync();
+		windowB.minimap = !windowB.minimap;
+		flushSync();
+
+		assert.equal(localStorage.getItem('editor.fontSize'), '30');
+		assert.equal(localStorage.getItem('editor.minimap'), String(windowB.minimap));
 	});
 
 	test('storage events fold another window changes into this instance', () => {
@@ -576,6 +596,25 @@ describe('settings persistence', async () => {
 		assert.equal(store.previewFullWidth, false);
 	});
 
+	test('settings load, persist, and reset the preview width through one normalizer', () => {
+		resetStorage({ 'preview.maxWidth': 'banana' });
+		assert.equal(createStore().previewMaxWidth, 880, 'garbage loads as the default');
+
+		resetStorage({ 'preview.maxWidth': '99999' });
+		const store = createStore();
+		assert.equal(store.previewMaxWidth, 1600, 'an out-of-range width loads clamped');
+
+		store.previewMaxWidth = 1200;
+		flushSync();
+		assert.equal(localStorage.getItem('preview.maxWidth'), '1200');
+		assert.equal(createStore().previewMaxWidth, 1200, 'a restart keeps it');
+
+		store.resetPreviewMaxWidth();
+		flushSync();
+		assert.equal(store.previewMaxWidth, 880);
+		assert.equal(localStorage.getItem('preview.maxWidth'), '880');
+	});
+
 	test('the legacy full-width key is honoured once and then superseded', () => {
 		resetStorage({ isFullWidth: 'true' });
 		assert.equal(createStore().previewFullWidth, true, 'an install upgrading from the old key keeps its setting');
@@ -810,6 +849,23 @@ describe('settings persistence', async () => {
 		assert.equal(restarted.preZenState, null, 'the snapshot is spent once it has been restored');
 	});
 
+	test('the line-highlight toggle and zen mode reach the editor as Monaco\'s string enum', () => {
+		// A ternary on the stored 'line' / 'none' can only produce "line": any
+		// non-empty string is truthy. So the store is driven the way the menu and
+		// zen mode drive it, and what reaches an open editor is read back.
+		resetStorage();
+		const store = createStore();
+		const reaching = () => updatedEditorOptions(store, 100, true, false).renderLineHighlight;
+		assert.equal(reaching(), 'line', 'the default draws the line');
+		store.toggleLineHighlight();
+		assert.equal(reaching(), 'none', 'the toggle turns it off');
+		store.toggleLineHighlight();
+		store.toggleZenMode();
+		assert.equal(reaching(), 'none', 'zen mode turns it off');
+		store.toggleZenMode();
+		assert.equal(reaching(), 'line', 'and leaving zen mode brings it back');
+	});
+
 	test('the zen fallback is each setting own default', () => {
 		// DEFAULT_PRE_ZEN_STATE spells out six values the store already declares in
 		// its field initializers. This is what stops the two copies drifting.
@@ -877,6 +933,26 @@ describe('settings persistence', async () => {
 		assert.equal(fallback.folderShowAllFiles, false);
 		fallback.setSidebarSplit(1);
 		assert.equal(fallback.sidebarSplit, SIDEBAR_SPLIT_RANGE.min);
+	});
+
+	test('the tab position select offers exactly the values the store accepts', () => {
+		const offered = settingsModule.TAB_POSITION_OPTIONS.map((option) => option.value);
+		assert.deepEqual(offered, ['top', 'left', 'right']);
+		for (const value of offered) {
+			resetStorage({ 'editor.tabPosition': value });
+			assert.equal(createStore().tabPosition, value, `${value} is offered but not kept`);
+		}
+	});
+
+	test('the setting is one control, defaulting to preview', async () => {
+		const { OPEN_FILE_MODE_OPTIONS, isOpenFileMode } = await import('../src/lib/utils/openFileMode.js');
+		resetStorage();
+		assert.equal(createStore().openFileMode, 'preview');
+		// One select with the three answers the store accepts, each under its own label.
+		assert.deepEqual(OPEN_FILE_MODE_OPTIONS.map((option) => option.value), ['preview', 'editor', 'split']);
+		assert.ok(OPEN_FILE_MODE_OPTIONS.every((option) => isOpenFileMode(option.value)));
+		const labels = OPEN_FILE_MODE_OPTIONS.map((option) => option.labelKey);
+		assert.equal(new Set(labels).size, labels.length);
 	});
 });
 
@@ -989,5 +1065,299 @@ describe('settings file export and import', async () => {
 			parseSettingsFile('{"markpadSettings":1,"settings":{},"themes":{"a":"{}","b":{"type":"dark"}}}').themes,
 			{ a: '{}' },
 		);
+	});
+});
+
+describe('settings panes', async () => {
+	// Settings.svelte renders each pane by walking SETTINGS_PANES[pane].rows, so
+	// what a pane shows — which rows, in which order, under which labels, with
+	// which bounds and gates — is this data.
+	const { SettingsStore, CODE_FONT_SIZE_RANGE, EDITOR_FONT_SIZE_RANGE, EDITOR_MAX_WIDTH_RANGE, PREVIEW_FONT_SIZE_RANGE } =
+		await import('../src/lib/stores/settings.svelte.js');
+	const { SETTINGS_PANES, numberInputHandlers, setNumberSetting } = await import('../src/lib/utils/settingsPanes.js');
+	const { t } = await import('../src/lib/utils/i18n.js');
+	const { DEFAULT_PREVIEW_MAX_WIDTH, MAX_PREVIEW_MAX_WIDTH, MIN_PREVIEW_MAX_WIDTH } = await import('../src/lib/utils/previewWidth.js');
+	type Row = (typeof SETTINGS_PANES)['editor']['rows'][number];
+
+	const languages = getSupportedLanguages().map((language) => language.code);
+	const allRows = Object.values(SETTINGS_PANES).flatMap((pane) => pane.rows);
+
+	function row(id: string): Row {
+		const found = allRows.find((candidate) => candidate.id === id);
+		assert.ok(found, `no settings row ${id}`);
+		return found;
+	}
+
+	function ids(pane: keyof typeof SETTINGS_PANES): string[] {
+		return SETTINGS_PANES[pane].rows.map((candidate) => candidate.id);
+	}
+
+	function store() {
+		const created = new SettingsStore();
+		onTestFinished(() => created.dispose());
+		return created;
+	}
+
+	test('the settings panes were actually read', () => {
+		// Every assertion below is vacuous if the panes were empty, and the label
+		// one matters most for the preview pane.
+		assert.deepEqual(Object.keys(SETTINGS_PANES).sort(), ['appearance', 'editor', 'files', 'preview']);
+		assert.ok(allRows.length > 25, `found ${allRows.length} rows`);
+		assert.deepEqual(ids('preview'), [
+			'preview-max-width',
+			'preview-font',
+			'preview-font-size',
+			'code-font',
+			'code-font-size',
+			'preview-cursor',
+			'preview-occurrences',
+			'preview-annotations',
+			'preview-table-breakout',
+			'preview-table-scroll',
+			'preview-newline-breaks',
+		]);
+	});
+
+	test('no two controls in one settings pane carry the same label, in any language', () => {
+		// The preview pane shipped `preview-font` and `code-font` both under
+		// `settings.font`, and both sizes under `settings.fontSize`: four controls,
+		// two labels, nothing on screen saying which pair was the prose font. The
+		// rule is stated over what `t()` renders, so two distinct keys a locale
+		// translates the same are the same defect.
+		const collisions: string[] = [];
+		for (const [pane, { rows }] of Object.entries(SETTINGS_PANES)) {
+			for (const lang of languages) {
+				const seen = new Map<string, string>();
+				for (const { id, labelKey } of rows) {
+					const label = t(labelKey, lang);
+					const owner = seen.get(label);
+					if (owner) collisions.push(`${lang} ${pane}: ${owner} and ${id} both read "${label}"`);
+					else seen.set(label, id);
+				}
+			}
+		}
+		assert.deepEqual(collisions, []);
+	});
+
+	test('every key a settings row renders exists in English', () => {
+		// The component reaches these through `t(row.labelKey)` and friends, which
+		// the translation-coverage scanner cannot resolve on its own.
+		const keys = allRows.flatMap((candidate) => [
+			candidate.labelKey,
+			candidate.hintKey,
+			candidate.titleKey,
+			candidate.inactiveTitleKey,
+			...(candidate.kind === 'select' ? candidate.options.map((option) => option.labelKey) : []),
+		]);
+		const missing = keys.filter((key): key is string => key !== undefined && t(key, 'en') === key);
+		assert.deepEqual(missing, []);
+	});
+
+	test('the settings UI renders its bounds from the shared range constants', () => {
+		const ranges = Object.fromEntries(
+			allRows.flatMap((candidate) => (candidate.kind === 'number' ? [[candidate.id, candidate.range]] : [])),
+		);
+		assert.deepEqual(ranges, {
+			'editor-font-size': EDITOR_FONT_SIZE_RANGE,
+			'editor-max-width': EDITOR_MAX_WIDTH_RANGE,
+			'preview-font-size': PREVIEW_FONT_SIZE_RANGE,
+			'code-font-size': CODE_FONT_SIZE_RANGE,
+		});
+		// The same objects, not copies that agree today: persistence clamps against these.
+		assert.equal(ranges['editor-font-size'], EDITOR_FONT_SIZE_RANGE);
+		assert.equal(ranges['editor-max-width'], EDITOR_MAX_WIDTH_RANGE);
+		assert.equal(ranges['preview-font-size'], PREVIEW_FONT_SIZE_RANGE);
+		assert.equal(ranges['code-font-size'], CODE_FONT_SIZE_RANGE);
+	});
+
+	test('numeric setting inputs commit through the clamp, and not while typing', () => {
+		for (const id of ['editor-font-size', 'editor-max-width', 'preview-font-size', 'code-font-size']) {
+			const numberRow = row(id);
+			assert.equal(numberRow.kind, 'number');
+			if (numberRow.kind !== 'number') continue;
+			const { range } = numberRow;
+			const settingsStore = store();
+			const handlers = numberInputHandlers(range, (value) => setNumberSetting(settingsStore, numberRow, value));
+			const input = document.createElement('input');
+			input.type = 'number';
+			input.addEventListener('input', handlers.oninput);
+			input.addEventListener('change', handlers.onchange);
+			input.addEventListener('blur', handlers.onblur);
+			input.addEventListener('keydown', handlers.onkeydown);
+			const read = () => settingsStore[numberRow.key];
+			const type = (text: string, event: Event) => {
+				input.value = text;
+				input.dispatchEvent(event);
+			};
+
+			// Half-typed numbers are left alone: the "1" of "18" is not clamped up to the minimum.
+			const before = read();
+			type('1', new Event('input'));
+			assert.equal(read(), before, `${id}: a keystroke below the range was committed`);
+			assert.equal(input.value, '1', `${id}: the field was rewritten mid-keystroke`);
+			type('', new Event('input'));
+			assert.equal(read(), before, `${id}: an empty field reached the store`);
+			type(String(range.min + range.step), new Event('input'));
+			assert.equal(read(), range.min + range.step, `${id}: an in-range value is applied as it is typed`);
+
+			// Each commit path clamps and writes the clamped value back into the field.
+			type(String(range.max + 1000), new KeyboardEvent('keydown', { key: 'Enter' }));
+			assert.equal(read(), range.max, `${id}: Enter`);
+			assert.equal(input.value, String(range.max));
+			type(String(range.min - 1000), new Event('blur'));
+			assert.equal(read(), range.min, `${id}: blur`);
+			assert.equal(input.value, String(range.min));
+			type('', new Event('change'));
+			assert.equal(read(), range.default, `${id}: change on an empty field falls back to the default`);
+			assert.equal(input.value, String(range.default));
+			type(String(range.max + 1), new KeyboardEvent('keydown', { key: 'a' }));
+			assert.equal(read(), range.default, `${id}: a key other than Enter committed`);
+		}
+	});
+
+	test('the wrap column sits under the wrap mode, and is inert without it', () => {
+		// Monaco reads `wordWrapColumn` only in that wrap mode; the prerequisite is the row above.
+		const editor = ids('editor');
+		assert.equal(editor.indexOf('editor-max-width'), editor.indexOf('editor-word-wrap') + 1);
+		const wrapColumn = row('editor-max-width');
+		const settingsStore = store();
+		for (const mode of ['off', 'on']) {
+			settingsStore.wordWrap = mode;
+			assert.equal(wrapColumn.inactive?.(settingsStore), true, `the wrap column is live with word wrap ${mode}`);
+		}
+		settingsStore.wordWrap = 'wordWrapColumn';
+		assert.equal(wrapColumn.inactive?.(settingsStore), false);
+	});
+
+	test('the word count is greyed out when there is no status bar to show it in', () => {
+		const editor = ids('editor');
+		assert.equal(editor.indexOf('editor-word-count'), editor.indexOf('editor-status-bar') + 1);
+		const wordCount = row('editor-word-count');
+		const settingsStore = store();
+		settingsStore.statusBar = false;
+		assert.equal(wordCount.inactive?.(settingsStore), true);
+		settingsStore.statusBar = true;
+		assert.equal(wordCount.inactive?.(settingsStore), false);
+	});
+
+	test('Settings exposes a bounded preview-width input and reset action', () => {
+		const width = row('preview-max-width');
+		assert.equal(width.kind, 'previewWidth');
+		if (width.kind !== 'previewWidth') return;
+		assert.equal(width.range.min, MIN_PREVIEW_MAX_WIDTH);
+		assert.equal(width.range.max, MAX_PREVIEW_MAX_WIDTH);
+
+		const settingsStore = store();
+		settingsStore.previewMaxWidth = MAX_PREVIEW_MAX_WIDTH;
+		settingsStore.codeFontSize = CODE_FONT_SIZE_RANGE.max;
+		SETTINGS_PANES.preview.reset?.(settingsStore);
+		assert.equal(settingsStore.previewMaxWidth, DEFAULT_PREVIEW_MAX_WIDTH);
+		assert.equal(settingsStore.codeFontSize, CODE_FONT_SIZE_RANGE.default);
+	});
+});
+
+describe('settings row layout', async () => {
+	/*
+	 * `.setting-item` is a two-column flex row: a leading <label> that occupies
+	 * `--settings-label-column`, then the controls. Each control class carries its
+	 * own sizing rule — `.select-wrapper` is 220px wide, `.slider-container` is
+	 * `flex: 0 0 auto`, and so on — and every one of those rules assumes the
+	 * element it names is a DIRECT child of the row, i.e. a flex item of it.
+	 *
+	 * The Appearance pane's theme row broke that assumption and nothing noticed.
+	 * It wrapped its `.select-wrapper` in an unclassed `<div>` (to stack a
+	 * "delete selected theme" link under the dropdown) and made that div a COLUMN
+	 * flex container. The flex item of the row was then the unclassed div, which
+	 * no rule sizes, and `.select-wrapper`'s `flex: 0 1 220px` was read down the
+	 * column axis, so 220px became a HEIGHT: the dropdown rendered 79px too narrow
+	 * and sat 191px below its own label.
+	 *
+	 * jsdom does no layout, so the rows are checked by shape on the mounted panes.
+	 * "A rule sizes it" is read off the element itself: Svelte puts the
+	 * component's scoping class only on elements one of its own selectors matches.
+	 */
+	const { mount, unmount } = await import('svelte');
+	const { default: Settings } = await import('../src/lib/components/Settings.svelte');
+
+	/** The control classes `.setting-item`'s row layout sizes as flex items of the row. */
+	const ROW_SIZED_CONTROLS = ['select-wrapper', 'slider-container', 'toggle', 'custom-dropdown-wrapper'];
+
+	const describeEl = (el: Element) => `<${el.tagName.toLowerCase()}${el.className ? ` class="${el.className.replace(/ ?svelte-\w+/g, '')}"` : ''}>`;
+
+	async function renderedRows() {
+		const previous = (window as any).__TAURI_INTERNALS__;
+		(window as any).__TAURI_INTERNALS__ = {
+			invoke: async (cmd: string) => {
+				if (cmd === 'get_system_fonts') return ['Menlo', 'Arial'];
+				if (cmd === 'get_saved_vscode_themes') return ['Nord'];
+				if (cmd === 'plugin:app|version') return '9.9.9';
+				return 'macos';
+			},
+			transformCallback: () => 0,
+		};
+		onTestFinished(() => ((window as any).__TAURI_INTERNALS__ = previous));
+		const target = document.createElement('div');
+		document.body.append(target);
+		const app = mount(Settings, { target, props: { show: true, theme: 'vscode:Nord', onclose() {} }, intro: false });
+		onTestFinished(() => {
+			unmount(app);
+			target.remove();
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		flushSync();
+
+		const rows: { pane: string; row: HTMLElement; label: string }[] = [];
+		const panes = [...target.querySelectorAll<HTMLButtonElement>('.nav-item')];
+		for (const pane of panes) {
+			pane.click();
+			flushSync();
+			for (const row of target.querySelectorAll<HTMLElement>('.settings-panel .setting-item')) {
+				const label = row.firstElementChild?.textContent?.replace(/\s+/g, ' ').trim() ?? '(empty row)';
+				rows.push({ pane: pane.textContent!.trim(), row, label });
+			}
+		}
+		return rows;
+	}
+
+	test('every settings row was found', async () => {
+		// Vacuous-pass guard: the row assertions below say nothing if no row rendered.
+		const rows = await renderedRows();
+		const panes = new Set(rows.map((entry) => entry.pane));
+		assert.ok(rows.length > 25, `found ${rows.length} .setting-item rows`);
+		assert.ok(panes.size >= 4, `rows in ${[...panes].join(', ')}`);
+	});
+
+	test('a settings row leads with the label that names its control', async () => {
+		const wrong = (await renderedRows())
+			.filter(({ row }) => row.firstElementChild?.tagName !== 'LABEL')
+			.map(({ pane, label, row }) => `${pane} / ${label} leads with ${row.firstElementChild ? describeEl(row.firstElementChild) : 'nothing'}`);
+		assert.deepEqual(wrong, [], 'a row whose first child is not the <label> loses the label column');
+	});
+
+	test('every control in a settings row is a flex item the stylesheet sizes', async () => {
+		// The unclassed <div> that broke the theme row would appear here.
+		const unstyled = (await renderedRows()).flatMap(({ pane, label, row }) => {
+			const scope = [...row.classList].find((name) => name.startsWith('svelte-'));
+			assert.ok(scope, `${label}: the row itself is styled`);
+			return [...row.children]
+				.slice(1)
+				.filter((child) => !child.classList.contains(scope))
+				.map((child) => `${pane} / ${label}: ${describeEl(child)} has no rule`);
+		});
+		assert.deepEqual(unstyled, [], 'a direct child of .setting-item that no rule sizes gets no column');
+	});
+
+	test('no settings row buries a sized control below its own flex level', async () => {
+		// `.select-wrapper` one level deeper is the theme-row defect: its sizing
+		// stops meaning "width" as soon as some other element becomes the flex item.
+		// `.number-input-wrapper` legitimately lives inside `.slider-container`,
+		// which is itself a direct child, so a sized parent is allowed.
+		const sized = (el: Element | null) => !!el && ROW_SIZED_CONTROLS.some((name) => el.classList.contains(name));
+		const buried = (await renderedRows()).flatMap(({ pane, label, row }) =>
+			[...row.querySelectorAll(ROW_SIZED_CONTROLS.map((name) => `.${name}`).join(','))]
+				.filter((control) => control.parentElement !== row && !sized(control.parentElement))
+				.map((control) => `${pane} / ${label}: ${describeEl(control)}`),
+		);
+		assert.deepEqual(buried, [], 'a sized control must be a direct child of its .setting-item');
 	});
 });

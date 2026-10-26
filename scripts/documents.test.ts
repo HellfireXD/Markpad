@@ -10,20 +10,24 @@ import {
 	DROPPABLE_IMAGE_EXTENSIONS,
 	dropPaneFor,
 	dropZoneLabel,
+	handleDrop,
 	routeDroppedFile,
 	type DropAction,
 	type DropPane,
 } from '../src/lib/utils/fileDrop.js';
+import { openDiffView } from '../src/lib/utils/diffView.js';
 import { HOME_TAB_PATH } from '../src/lib/utils/homeTab.js';
+import { autoSaveFailureNeedsToast, isAutoSaveEligible, type AutoSaveTabState } from '../src/lib/utils/autoSaveTimer.js';
 import { asRendererLine } from '../src/lib/utils/lineCoordinates.js';
 import {
 	DEFAULT_OPEN_FILE_MODE,
 	isOpenFileMode,
 	resolveOpenFileMode,
 } from '../src/lib/utils/openFileMode.js';
+import { MARKDOWN_OPEN_FILTERS } from '../src/lib/utils/markdownLinks.js';
 import { lineEndingLabel } from '../src/lib/utils/tabModels.js';
 import { buildTransferredTab, snapshotTab, validateTransferPayload, type TransferableTab } from '../src/lib/utils/tabTransfer.js';
-import { viewerCommandFor, type KeyContext } from '../src/lib/utils/viewerKeymap.js';
+import { dispatchViewerKey, viewerCommandFor, type KeyContext } from '../src/lib/utils/viewerKeymap.js';
 
 describe('lossy decode save guard', () => {
 	// --- Behavioural: the flag survives a cross-window move ------------------
@@ -133,6 +137,58 @@ describe('save from reading mode', () => {
 				);
 			}
 		}
+	});
+
+	test('the browser save dialog is always suppressed', () => {
+		// Reading mode would otherwise surface the webview's own Save Page dialog.
+		// The keystroke is prevented before the command runs, in every mode.
+		for (const isEditing of [false, true]) {
+			const events: string[] = [];
+			const stroke = { ...MOD_S, preventDefault: () => void events.push('prevented') };
+			dispatchViewerKey(stroke, { ...READING, isEditing }, (command) => void events.push(`run:${command}`));
+			assert.deepEqual(events, ['prevented', 'run:save'], `isEditing=${isEditing}`);
+		}
+
+		// A chord that means nothing keeps its default.
+		const events: string[] = [];
+		const stroke = { ...MOD_S, key: 'j', code: 'KeyJ', ctrlKey: false, preventDefault: () => void events.push('prevented') };
+		dispatchViewerKey(stroke, READING, (command) => void events.push(`run:${command}`));
+		assert.deepEqual(events, []);
+	});
+});
+
+describe('auto-save debounce', () => {
+	/** A dirty file in the editor, the state the timer exists for. */
+	const EDITING: AutoSaveTabState = {
+		id: 'a', path: '/notes/a.md', isDirty: true, editable: true, hasPendingConflict: false, decodedLossily: false,
+	};
+	const never = () => false;
+	const always = () => true;
+
+	test('the debounced auto-save is held back while a conflict is unanswered', () => {
+		// Otherwise the 1.5s timer fires while the bar is still asking "reload or
+		// keep mine": the user's edits survive, but the external change is gone
+		// from disk before either answer can be given.
+		assert.equal(isAutoSaveEligible(EDITING, never), true);
+		assert.equal(isAutoSaveEligible({ ...EDITING, hasPendingConflict: true }, never), false);
+	});
+
+	test('a tab that can only be refused stops re-arming the timer', () => {
+		// Auto-save re-arms on every keystroke. Without this the guard was reached
+		// again every 1.5s for as long as the user kept typing.
+		const lossy = { ...EDITING, decodedLossily: true };
+		// The FIRST attempt still happens: it is what produces the explanation.
+		assert.equal(isAutoSaveEligible(lossy, never), true);
+		assert.equal(isAutoSaveEligible(lossy, always), false);
+		// "Save As" to a new file clears the lossy flag, which restores it.
+		assert.equal(isAutoSaveEligible(EDITING, always), true);
+	});
+
+	test('a refused save does not add a generic toast to its own explanation', () => {
+		assert.equal(autoSaveFailureNeedsToast('a', { isLossySaveRefused: always, hasExternalChangeConflict: never }), false);
+		assert.equal(autoSaveFailureNeedsToast('a', { isLossySaveRefused: never, hasExternalChangeConflict: always }), false);
+		// A genuine write failure still says so.
+		assert.equal(autoSaveFailureNeedsToast('a', { isLossySaveRefused: never, hasExternalChangeConflict: never }), true);
 	});
 });
 
@@ -443,6 +499,48 @@ describe('editor line ending', () => {
 	});
 });
 
+describe('external change comparison', () => {
+	test('the diff view owns its models and never edits the document', () => {
+		// Handing it the tab's live model would put a second editor on a buffer
+		// Editor.svelte owns, and a read-only view of a document is not a place to
+		// change it from.
+		const disposed: string[] = [];
+		const created: { text: string; language: string }[] = [];
+		let options: Record<string, unknown> = {};
+		let shown: { original: unknown; modified: unknown } | null = null;
+		const fakeMonaco = {
+			editor: {
+				createModel: (text: string, language: string) => {
+					created.push({ text, language });
+					return { dispose: () => disposed.push(`model:${text}`) };
+				},
+				createDiffEditor: (_element: unknown, given: Record<string, unknown>) => {
+					options = given;
+					return {
+						setModel: (pair: { original: unknown; modified: unknown }) => { shown = pair; },
+						dispose: () => disposed.push('editor'),
+					};
+				},
+			},
+		} as unknown as Parameters<typeof openDiffView>[0];
+
+		const close = openDiffView(fakeMonaco, {} as HTMLElement, 'on disk', 'mine', 'markdown');
+		assert.deepEqual(created, [
+			{ text: 'on disk', language: 'markdown' },
+			{ text: 'mine', language: 'markdown' },
+		]);
+		assert.ok(shown, 'the diff editor was given its own two models');
+		assert.equal(options.readOnly, true);
+		assert.equal(options.originalEditable, false);
+		assert.deepEqual(disposed, []);
+
+		// Every model it creates is disposed, or opening the view repeatedly leaks
+		// one document's worth of text each time.
+		close();
+		assert.deepEqual(disposed.sort(), ['editor', 'model:mine', 'model:on disk']);
+	});
+});
+
 describe('open file mode', () => {
 	/* ------------------------------------------------- the stored preference */
 
@@ -560,5 +658,43 @@ describe('file drop routing', () => {
 		// The editor pane is only the editor while an editor is mounted there.
 		assert.equal(dropPaneFor('editor', false), 'preview');
 		assert.equal(dropPaneFor('preview', true), 'preview');
+	});
+
+	test('the viewer routes both panes through it, and acts on all three answers', () => {
+		const drop = (target: DropPane | null, hasEditor: boolean, paths: string[]) => {
+			const calls: string[] = [];
+			handleDrop(paths, target, hasEditor, {
+				insert: (path) => calls.push(`insert ${path}`),
+				open: (path) => calls.push(`open ${path}`),
+				unsupported: (path) => calls.push(`unsupported ${path}`),
+			});
+			return calls;
+		};
+		const batch = ['/n/spec.md', '/n/figure.png', '/n/archive.zip'];
+
+		assert.deepEqual(drop('editor', true, batch), [
+			'open /n/spec.md',
+			'insert /n/figure.png',
+			'unsupported /n/archive.zip',
+		]);
+		assert.deepEqual(drop('preview', true, batch), [
+			'open /n/spec.md',
+			'unsupported /n/figure.png',
+			'unsupported /n/archive.zip',
+		]);
+		// Off both panes, a document still opens.
+		assert.deepEqual(drop(null, true, ['/n/spec.md']), ['open /n/spec.md']);
+		// No editor mounted: the editor pane answers as the preview.
+		assert.deepEqual(drop('editor', false, ['/n/figure.png']), ['unsupported /n/figure.png']);
+	});
+});
+
+describe('the Open dialog', () => {
+	test('the Open dialog offers every extension Markpad treats as a document', () => {
+		// Markpad opens, renders and saves `.txt` like any other note (#535); a
+		// shorter list hid those files behind "All Files".
+		const [markdown, all] = MARKDOWN_OPEN_FILTERS;
+		assert.deepEqual([...markdown.extensions].sort(), ['markdown', 'md', 'mdown', 'mkd', 'txt']);
+		assert.deepEqual(all.extensions, ['*']);
 	});
 });

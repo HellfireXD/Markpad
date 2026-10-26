@@ -12,6 +12,10 @@ import {
 } from '../src/lib/utils/tabHistory.js';
 import { getMarkdownLinkTarget, isOpenInNewTabMarkdownTarget, resolveMarkdownTargetPath } from '../src/lib/utils/markdownLinks.js';
 import { jumpScrollBehavior } from '../src/lib/utils/motion.js';
+import { EditorJumps, type JumpEditor } from '../src/lib/utils/editorJumps.js';
+import { asBufferLine } from '../src/lib/utils/lineCoordinates.js';
+import { viewerCommandFor } from '../src/lib/utils/viewerKeymap.js';
+import { viewerCommandCalls } from './keymapHarness.js';
 
 describe('file history and markdown link targets', () => {
 	test('new file tabs start history with their path', () => {
@@ -19,6 +23,16 @@ describe('file history and markdown link targets', () => {
 			history: ['/notes/a.md'],
 			historyIndex: 0,
 		});
+	});
+
+	// History is a list of PATHS. `createFileHistory` used to take the tab's
+	// initial content as an ignored second parameter, which is how `addNewTab`
+	// came to seed a history with a content string in it. Nothing reads such a
+	// parameter, so only the type checker can refuse it: with it back, this
+	// directive is unused and `npm run check` fails.
+	test('no caller hands a file history anything but a path', () => {
+		// @ts-expect-error a history is built from a path alone
+		assert.deepEqual(createFileHistory('/notes/a.md', '# a'), { history: ['/notes/a.md'], historyIndex: 0 });
 	});
 
 	// Entries exist to be re-opened, and an untitled buffer cannot be. See the
@@ -149,5 +163,163 @@ describe('jump scroll motion', () => {
 		assert.equal(jumpScrollBehavior.length, 1);
 		assert.equal(jumpScrollBehavior(true), 'smooth');
 		assert.equal(jumpScrollBehavior(false), 'auto');
+	});
+});
+
+describe('jump to the selected fragment', () => {
+	/** A Monaco editor over `lines`, recording what a jump does to it. */
+	function fakeEditor(lines: string[]) {
+		const log: unknown[] = [];
+		const model = {
+			getLineCount: () => lines.length,
+			getLineMaxColumn: (line: number) => {
+				// Monaco throws here too, for a line past the end of the model.
+				if (line < 1 || line > lines.length) throw new Error(`Illegal value for lineNumber: ${line}`);
+				return lines[line - 1].length + 1;
+			},
+			findNextMatch: () => null,
+		};
+		const editor = {
+			getModel: () => model,
+			revealLineNearTop: (line: number) => log.push(['top', line]),
+			revealLineInCenterIfOutsideViewport: (line: number) => log.push(['center', line]),
+			setSelection: (selection: unknown) => log.push(['select', selection]),
+			focus: () => log.push(['focus']),
+		} as unknown as JumpEditor;
+		return { editor, log };
+	}
+
+	function jumps(editor: JumpEditor, state = { ready: true }) {
+		return new EditorJumps({
+			monaco: () => ({ editor: { ScrollType: { Smooth: 0, Immediate: 1 } } }) as never,
+			editor: () => editor,
+			ready: () => state.ready,
+			scrollTo: () => {},
+		});
+	}
+
+	const lines = ['# One', 'text', '## Two'];
+
+	test('the outline and the context menu share one line-to-editor jump', () => {
+		// `revealHeader` used to reveal and select the line itself. A second copy
+		// next to #90's would scroll differently, focus differently, and only one
+		// of them would clamp.
+		for (const line of [3, 40]) {
+			const outline = fakeEditor(lines);
+			const contextMenu = fakeEditor(lines);
+			jumps(outline.editor).revealHeader(asBufferLine(line), 'Two');
+			jumps(contextMenu.editor).revealSourceRange(line, line, 'top');
+			assert.deepEqual(outline.log, contextMenu.log, `line ${line}`);
+		}
+	});
+
+	test('the jump clamps to the buffer before asking Monaco for a column', () => {
+		// The preview can hand over a stale line: its HTML is the render of a
+		// buffer that may have been replaced by a shorter one since.
+		const { editor, log } = fakeEditor(lines);
+		jumps(editor).revealSourceRange(50, 60);
+		assert.deepEqual(log, [
+			['center', 3],
+			['select', { startLineNumber: 3, startColumn: 1, endLineNumber: 3, endColumn: 7 }],
+			['focus'],
+		]);
+	});
+
+	test('a jump asked for before Monaco has loaded is queued, not dropped', () => {
+		// `monaco-editor` is imported dynamically, so the editor is ready several
+		// frames after the component exists, and the preview calls in right after
+		// flipping into edit mode.
+		const { editor, log } = fakeEditor(lines);
+		const state = { ready: false };
+		const pane = jumps(editor, state);
+		pane.revealSourceRange(2, 2);
+		assert.deepEqual(log, []);
+
+		state.ready = true;
+		pane.spendPending();
+		assert.deepEqual(log, [
+			['center', 2],
+			['select', { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 5 }],
+			['focus'],
+		]);
+
+		pane.spendPending();
+		assert.equal(log.length, 3, 'a queued jump is spent once');
+	});
+});
+
+describe('preview scroll sync across the front matter', async () => {
+	const { asBufferLine, lineCoordinates } = await import('../src/lib/utils/lineCoordinates.js');
+	const { getPreviewScrollAnchor, getPreviewScrollSyncPosition, getPreviewScrollTopForSyncPosition } = await import(
+		'../src/lib/utils/previewScrollSync.js'
+	);
+	const { PREVIEW_ANCHOR_OFFSET } = await import('../src/lib/utils/previewAnchor.js');
+	type PreviewScroller = import('../src/lib/utils/previewScrollSync.js').PreviewScroller;
+
+	// Scroll sync crosses the line boundary in BOTH directions:
+	// `ScrollSyncPosition.line` is a buffer line, because the editor is the only
+	// pane that can produce one, while everything the preview answers with
+	// counts from the body. On a document with front matter the panes drifted
+	// apart by exactly that many lines.
+	const FRONT_MATTER = 3;
+	const coords = lineCoordinates('---\na: 1\n---\n# body\n');
+
+	type FakeBlock = { nodeType: 1; tagName: string; childNodes: FakeBlock[]; getAttribute: (n: string) => string | null; top: number; height: number };
+	const block = (line: number, top: number, height: number): FakeBlock => ({
+		nodeType: 1,
+		tagName: 'P',
+		childNodes: [],
+		getAttribute: (name) => (name === 'data-sourcepos' ? `${line}:1-${line}:10` : null),
+		top,
+		height,
+	});
+	/** Body lines 1, 5 and 9, and no front matter panel. */
+	const SCROLL_MAX = 800;
+	function preview(scrollTop: number) {
+		return {
+			nodeType: 1,
+			tagName: 'DIV',
+			childNodes: [block(1, 100, 40), block(5, 300, 40), block(9, 500, 60)],
+			getAttribute: () => null,
+			scrollTop,
+			querySelector: () => null,
+		} as unknown as PreviewScroller;
+	}
+	const measure = (node: unknown) => ({ top: (node as FakeBlock).top, height: (node as FakeBlock).height });
+
+	test('scroll sync converts in both directions', () => {
+		// The preview at body line 5 tells the editor buffer line 8.
+		const captured = getPreviewScrollSyncPosition(preview(300), SCROLL_MAX, coords, measure);
+		assert.equal(captured.section, 'body');
+		assert.equal(captured.line, 5 + FRONT_MATTER, 'a line read off the preview is shifted before the editor sees it');
+
+		// And the editor at buffer line 8 puts the preview on body line 5.
+		const target = getPreviewScrollTopForSyncPosition(preview(0), SCROLL_MAX, { section: 'body', ratio: 0, line: asBufferLine(5 + FRONT_MATTER) }, coords, measure);
+		assert.equal(target, 300, 'a line coming from the editor is shifted back before the preview seeks');
+	});
+
+	test("the preview's reading position is already a body line", () => {
+		// The outline and the tab's anchor both count from the body, so the
+		// preview's answer is not shifted.
+		assert.equal(getPreviewScrollAnchor(preview(300 - PREVIEW_ANCHOR_OFFSET), measure), 5);
+	});
+});
+
+describe('edit view toggle', () => {
+	test('one function owns what ⌘E means, and every entry point uses it', () => {
+		// The hotkey, the toolbar, the title bar and Monaco's own command all route
+		// to `toggleEditView`, so the chord cannot mean one thing with the caret in
+		// the editor and another with it in the preview. The title bar's Edit button
+		// runs in navigation.viewMode.spec.ts. The viewer passing `runViewerCommand`
+		// as the editor's `oncommand` prop is not tested: it needs MarkdownViewer
+		// mounted.
+		assert.equal(
+			viewerCommandFor(
+				{ key: 'e', code: 'KeyE', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false },
+				{ mode: 'app', osType: 'windows', isSplit: false, overlayOpen: false, dialogOpen: false, isEditing: false, editorHasFocus: false },
+			),
+			'toggle-edit-view',
+		);
+		assert.deepEqual(viewerCommandCalls()['toggle-edit-view'], ['toggleEditView']);
 	});
 });

@@ -4,9 +4,10 @@ import { describe, test } from 'node:test';
 import { asBufferLine, asRendererLine, lineCoordinates, tabAnchorForEditorTopLine } from '../src/lib/utils/lineCoordinates.js';
 import { outwardSign, planPaneSlide } from '../src/lib/utils/paneSlide.js';
 import { getScrollSyncPositionFromPixels, getScrollTopForSyncPosition, type ScrollSyncPosition } from '../src/lib/utils/scrollSync.js';
-import { splitRatioAfterMove } from '../src/lib/utils/splitPanes.ts';
+import { splitRatioAfterDrag, splitRatioAfterKey, splitRatioAfterMove } from '../src/lib/utils/splitPanes.ts';
 import { activeTocIdForLine, sourceLineOf, type TocLineEntry } from '../src/lib/utils/tocFollow.js';
 import { isTocOverhanging, isTocOverPreview } from '../src/lib/utils/tocOverlay.ts';
+import { bindScrollSync } from '../src/lib/utils/editorJumps.js';
 
 describe('scroll sync section mapping', () => {
 	// These tests import and run the mapping. The previous scroll-sync tests read
@@ -217,6 +218,19 @@ describe('split pane ratio', () => {
 		// the ratio is the editor's share and the editor is now on the far side.
 		assert.equal(splitRatioAfterMove(0.5, 0.1, 'right'), 0.4);
 		assert.equal(splitRatioAfterMove(0.5, -0.1, 'right'), 0.6);
+	});
+
+	test('both splitter routes take the direction from the same place', () => {
+		// A splitter that follows the pointer one way and the arrow keys the other
+		// is invisible until someone swaps the panes.
+		for (const side of ['left', 'right'] as const) {
+			const dragged = splitRatioAfterDrag(0.5, 400, 450, 1000, side);
+			const keyed = splitRatioAfterKey(0.5, 'ArrowRight', side)!;
+			assert.equal(Math.sign(dragged - 0.5), Math.sign(keyed - 0.5), side);
+			assert.equal(Math.sign(keyed - 0.5), side === 'left' ? 1 : -1, side);
+			assert.equal(Math.sign(splitRatioAfterKey(0.5, 'ArrowLeft', side)! - 0.5), -Math.sign(keyed - 0.5), side);
+		}
+		assert.equal(splitRatioAfterKey(0.5, 'Enter', 'left'), null);
 	});
 });
 
@@ -704,5 +718,30 @@ describe('outline overlay placement', () => {
 			isTocOverhanging({ ...DEFAULTS, ...reading, tocSide: 'left', viewerWidth: 600, tocWidth: 60 }),
 			true,
 		);
+	});
+});
+
+describe('scroll sync input', () => {
+	test('typing does not initiate split scroll synchronization', () => {
+		// The editor-to-preview sync listens to scrolling. A caret move by itself,
+		// which every keystroke is, must not drag the other pane along.
+		const listeners: Record<string, ((e: unknown) => void)[]> = { scroll: [], cursor: [] };
+		const on = (kind: string) => (listener: (e: unknown) => void) => {
+			listeners[kind].push(listener);
+			return { dispose: () => listeners[kind].splice(listeners[kind].indexOf(listener), 1) };
+		};
+		const editor = { onDidScrollChange: on('scroll'), onDidChangeCursorPosition: on('cursor') };
+		let synced = 0;
+		const binding = bindScrollSync(editor as never, () => synced++);
+
+		for (const listener of listeners.cursor) listener({ position: { lineNumber: 2, column: 4 } });
+		for (const listener of listeners.scroll) listener({ scrollTopChanged: false, scrollLeftChanged: true });
+		assert.equal(synced, 0);
+
+		for (const listener of listeners.scroll) listener({ scrollTopChanged: true });
+		assert.equal(synced, 1);
+
+		binding.dispose();
+		assert.deepEqual(listeners, { scroll: [], cursor: [] });
 	});
 });

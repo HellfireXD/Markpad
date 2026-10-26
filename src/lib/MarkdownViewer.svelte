@@ -21,17 +21,23 @@
 	import Toc from './components/Toc.svelte';
 	import Toast from './components/Toast.svelte';
 	import FindBar from './components/FindBar.svelte';
-	import { reviewDirtyTabs } from './sessions/closeReview.js';
+	import { createWindowExit } from './sessions/windowExit.js';
+	import { createExternalChange } from './sessions/externalChange.svelte.js';
+	import { createViewMode } from './sessions/viewMode.svelte.js';
+import { createFrontMatterEdit } from './sessions/frontMatterEdit.js';
+import { createColdEnrichmentRestore } from './sessions/coldEnrichmentRestore.js';
+	import { autoSaveFailureNeedsToast, isAutoSaveEligible } from './utils/autoSaveTimer.js';
 	import { exportAsHtml as _exportHtml, exportAsPdf as _exportPdf } from './utils/export';
 	import { askToOpenExportedFile } from './utils/openExportedFile.js';
-	import { isHomePath } from './utils/homeTab.js';
-	import { copyableFlavours } from './utils/previewCopy.js';
-	import { hasExportableDocument, hasRealFilePath } from './utils/tabFileActions.js';
+	import { showsHomeScreen } from './utils/homeTab.js';
+	import { handleCopy as handlePreviewCopy } from './utils/previewCopy.js';
+	import { hasExportableDocument } from './utils/tabFileActions.js';
 	import { editorLanguageFor } from './utils/editorLanguage.js';
-	import { type ViewMode, viewModeOf } from './utils/titlebarToolbar.js';
+	import { editorReadOnly } from './utils/editorOptions.js';
+	import { viewModeOf } from './utils/titlebarToolbar.js';
 	import { buildMenuModel, installAppMenu, type MenuAction } from './utils/appMenu.js';
 	import ZoomOverlay from './components/ZoomOverlay.svelte';
-import { MARKDOWN_LINK_EXTENSIONS } from './utils/markdownLinks.js';
+import { MARKDOWN_OPEN_FILTERS } from './utils/markdownLinks.js';
 import {
 	resolveMermaidTheme,
 } from './utils/mermaidPrint.js';
@@ -39,40 +45,33 @@ import {
 	flashCopiedLabel,
 	renderRichContent as renderRichContentInto,
 } from './utils/richContent.js';
-import { observeFoldLayout, type FoldLayoutObservation } from './utils/foldLayout.js';
-import { patchPreview } from './utils/previewPatch.js';
+import { type FoldLayoutObservation } from './utils/foldLayout.js';
+import { followFoldLayout, previewPaneShown } from './utils/foldLayoutEffect.svelte.js';
+import { followPreviewPatch } from './utils/previewPatchEffect.svelte.js';
+import { patchHost } from './utils/previewPatch.js';
+import { refreshesPreviewCache } from './utils/previewRefresh.js';
 import {
 	revealFold,
 	toggleFold,
 	toggleFoldFromClick,
 	type FoldHost,
 } from './utils/foldState.js';
-import { dropPaneFor, dropZoneLabel, routeDroppedFile } from './utils/fileDrop.js';
-import { fontFamilyValue } from './utils/fontFamily.js';
-import { headingReference, headingText, preferredReferenceStyle } from './utils/headingReference.js';
+import { dropPaneFor, dropZoneLabel, handleDrop } from './utils/fileDrop.js';
+import { headingSlug, headingText, referenceForTab } from './utils/headingReference.js';
 import {
-	findSourceLineRange,
-	getSourceLineAtPreviewOffset,
-	invalidateAnchorMemos,
 	measureAnchorBox,
-	mergeSourceLineRanges,
 	restorePreviewReadingPosition,
-	PREVIEW_ANCHOR_OFFSET,
 	anchorScrollTop,
 	type AnchorBox,
 	type AnchorNode,
-	type LineRange,
 	type OffsetLayoutNode,
 } from './utils/previewAnchor.js';
 import { pointAtSource, sourceAtPoint, type SourceLineReader } from './utils/previewCursor.js';
 import { annotationOf, hitAt, occurrenceRanges, overlapping, rangeOf, type Annotation } from './utils/previewAnnotations.js';
 import {
-	asBufferLine,
 	asRendererLine,
 	lineCoordinates,
-	tabAnchorForEditorTopLine,
 	type BufferLine,
-	type BufferLineRange,
 	type RendererLine,
 } from './utils/lineCoordinates.js';
 import {
@@ -80,12 +79,12 @@ import {
 	getMarkdownBodyWithoutFrontMatter,
 	getFrontMatterListItems,
 	parseFrontMatter,
-	parseFrontMatterEditableValue,
 	removeFrontMatterListItem,
 	updateFrontMatterListItem,
 	updateFrontMatterField,
 	type FrontMatterField,
 } from './utils/frontMatter.js';
+import { FrontMatterFieldState } from './utils/frontMatterFieldState.svelte.js';
 import {
 	anchorIdCandidates,
 	getMarkdownLinkTarget as getRelativeMarkdownTarget,
@@ -93,43 +92,40 @@ import {
 	resolveMarkdownTargetPath,
 	type MarkdownLinkTarget as RelativeMarkdownTarget,
 } from './utils/markdownLinks.js';
-import { resolveLocalFileLinkPath } from './utils/localFileLinks.js';
-import { canonicalizePath, isSameFilePath } from './utils/pathIdentity.js';
-import { findSeedFromSelection } from './utils/findSeed.js';
-import { normalizeAssetPath } from './utils/exportHtml.js';
-import {
-	dropRecentFile,
-	isRecentFilesStorageEvent,
-	promoteRecentFile,
-	readStoredRecentFiles,
-	renameRecentFile,
-	updateStoredRecentFiles,
-} from './utils/recentFiles.js';
+import { followDocumentLink, handlePreviewClick, linkTooltipFor, openRelativeMarkdownTarget as openRelativeTarget, openWithSystem as openPathWithSystem } from './utils/previewLinks.js';
+import { canonicalizePath } from './utils/pathIdentity.js';
+import { ChoiceDialog } from './utils/choiceDialog.svelte.js';
+import { contextMenuFor, editorContextMenuItems, imageMenuItems, saveImageAs as saveImageAsFile } from './utils/viewerContextMenu.js';
+import { seedFindBar } from './utils/findSeed.js';
+import { createRecentFiles } from './utils/recentFiles.js';
 
 	const appWindow = getCurrentWindow();
 
 	import HomePage from './components/HomePage.svelte';
-	import { openNewWindow, pinnedTagFromWindowLabel, pinnedTagHolder, pinnedWindowToken } from './utils/pinnedTagWindow.js';
+	import { openNewWindow, pinnedTagFromWindowLabel } from './utils/pinnedTagWindow.js';
 import { tabManager, type Tab } from './stores/tabs.svelte.js';
-import { snapshotTab } from './utils/tabTransfer.js';
-import { outgoingTabAnchorLine } from './utils/editorPosition.js';
+import { createTabMovers, createTransferOptions } from './sessions/windowTransfer.js';
 import { createPaneSlider, planPaneSlide, type PanesShown } from './utils/paneSlide.js';
-import { adjustPreviewMaxWidth, getPreviewContentWidth } from './utils/previewWidth.js';
-import { isTocOverhanging } from './utils/tocOverlay.js';
-import { splitRatioAfterMove } from './utils/splitPanes.js';
-import { viewerCommandFor, type KeyContext, type ViewerCommand } from './utils/viewerKeymap.js';
+import { viewerCommandTable } from './utils/viewerCommands.js';
+import { dismissesToc, tocAutoCollapses } from './utils/tocOverlay.js';
+import { exportContextFrom, previewAppearanceFrom, previewLayout } from './utils/previewLayout.js';
+import { splitRatioAfterDrag, splitRatioAfterKey } from './utils/splitPanes.js';
+import { dispatchViewerKey, type KeyContext, type ViewerCommand } from './utils/viewerKeymap.js';
 import {
-	getScrollSyncPositionFromPixels,
-	getScrollTopForSyncPosition,
-	type ScrollSyncPosition,
-} from './utils/scrollSync.js';
+	getPreviewScrollAnchor as previewScrollAnchor,
+	getPreviewScrollSyncPosition as previewScrollSyncPosition,
+	getPreviewScrollTopForSyncPosition,
+} from './utils/previewScrollSync.js';
+import { type ScrollSyncPosition } from './utils/scrollSync.js';
 import { resolveTheme, settings, TOC_WIDTH_RANGE, wheelZoomFactor } from './stores/settings.svelte.js';
 import { t } from './utils/i18n.js';
 import { formatChord, modifierFor, opensInNewTab } from './utils/shortcuts.js';
-import { jumpScrollBehavior } from './utils/motion.js';
+import { commitWithoutTransitions, jumpScrollBehavior } from './utils/motion.js';
 import { createWindowSession } from './sessions/windowSession.svelte.js';
+import { reportWindowMeta } from './sessions/windowMeta.svelte.js';
 import { createBoundedWriter, restoreRecords, recoverySnapshot } from './sessions/unsavedRecovery.js';
-import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from './sessions/documentSession.svelte.js';
+import { createDocumentSession, type LoadMarkdownOptions } from './sessions/documentSession.svelte.js';
+import { followActiveFile } from './sessions/fileWatch.svelte.js';
 
 	import 'highlight.js/styles/github-dark.css';
 	import 'katex/dist/katex.min.css';
@@ -140,6 +136,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	let showSettings = $state(false);
 
 	let recentFiles = $state<string[]>([]);
+	const recentFileList = createRecentFiles((files) => (recentFiles = files));
 	let isFocused = $state(true);
 	
 	let markdownBody: HTMLElement | null = $state(null);
@@ -165,20 +162,8 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	let previewBlocks = $derived(
 		tabManager.activeTabId ? (previewHosts[tabManager.activeTabId] ?? null) : null,
 	);
-	let foldLayout: FoldLayoutObservation | null = null;
+	const foldLayout: { current: FoldLayoutObservation | null } = { current: null };
 	
-	const highlightColorMap: Record<string, string> = {
-		default: 'color-mix(in srgb, var(--color-accent-fg) 40%, transparent)',
-		yellow: 'rgba(255, 208, 0, 0.4)',
-		orange: 'rgba(255, 140, 0, 0.4)',
-		red: 'rgba(255, 60, 60, 0.4)',
-		pink: 'rgba(255, 105, 180, 0.4)',
-		purple: 'rgba(164, 108, 244, 0.4)',
-		blue: 'rgba(67, 138, 243, 0.4)',
-		cyan: 'rgba(43, 185, 178, 0.4)',
-		green: 'rgba(77, 177, 88, 0.4)',
-	};
-
 	let editorPane = $state<{ 
 		syncScrollToPosition: (position: ScrollSyncPosition, options?: { cursorIntoView?: boolean }) => void;
 		setCursor: (line: number, column: number) => void;
@@ -225,11 +210,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		if (editorHasFocus || !previewVisible) {
 			editorPane?.triggerFind?.();
 		} else if (markdownBody) {
-			// Seed BEFORE opening, so the bar that appears already holds the query.
-			// Nothing to seed leaves the previous query alone, which is what a
-			// repeated Cmd/Ctrl+F expects.
-			const seed = findSeedFromSelection(window.getSelection(), markdownBody);
-			if (seed) findBar?.setQuery(seed);
+			seedFindBar(findBar, window.getSelection(), markdownBody);
 			// Focus explicitly: `findOpen = true` is a no-op once open.
 			findOpen = true;
 			findBar?.focusInput();
@@ -246,15 +227,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	 * back to what the menu has always produced.
 	 */
 	function copyHeadingReference(text: string, slug: string) {
-		const tab = tabManager.activeTab;
-		const fileName = tab?.path ? tab.path.split(/[/\\]/).pop() || null : null;
-		const reference = headingReference({
-			text,
-			slug,
-			fileName,
-			style: preferredReferenceStyle(tab?.rawContent ?? ''),
-		});
-		invoke('clipboard_write_text', { text: reference });
+		invoke('clipboard_write_text', { text: referenceForTab(text, slug, tabManager.activeTab) });
 	}
 
 	function reportUnsupportedDrop(path: string) {
@@ -328,16 +301,13 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	 * preview but not the editor beside it (#744).
 	 */
 	let hasEditorPane = $derived(isEditing || isSplit);
-	let hasPreviewPane = $derived(!isEditing || isSplit);
+	let hasPreviewPane = $derived(previewPaneShown(isEditing, isSplit));
 	let frontMatterInfo = $derived(parseFrontMatter(rawContent));
 
 	let currentFile = $derived(tabManager.activeTab?.path ?? '');
 	let frontMatterPanelKey = $derived(currentFile || tabManager.activeTabId || 'untitled');
 	let frontMatterCollapsedByKey = $state<Record<string, boolean>>({});
-	let frontMatterEditErrors = $state<Record<string, string>>({});
-	let frontMatterTagDrafts = $state<Record<string, string>>({});
-	let frontMatterTagEditIndexes = $state<Record<string, number | null>>({});
-	let frontMatterTagEditDrafts = $state<Record<string, string>>({});
+	const frontMatterFields = new FrontMatterFieldState(() => frontMatterPanelKey);
 	let isFrontMatterCollapsed = $derived(frontMatterCollapsedByKey[frontMatterPanelKey] ?? true);
 	// An untitled tab is Markdown until saved under another name; see `editorLanguageFor`.
 	let isMarkdown = $derived(currentFile === '' || hasMarkdownLinkExtension(currentFile));
@@ -397,26 +367,9 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	let paneTopChrome = $derived(
 		hasEditorPane && settings.showEditorToolbar ? editorToolbarHeight : 0,
 	);
-	let previewContentWidth = $derived(getPreviewContentWidth(settings.previewMaxWidth, settings.previewFullWidth));
-	let previewAppearance = $derived({
-		fontFamily: fontFamilyValue(settings.previewFont, 'sans-serif'),
-		fontSize: settings.previewFontSize,
-		codeFontFamily: fontFamilyValue(settings.codeFont, 'monospace'),
-		codeFontSize: settings.codeFontSize,
-		highlightColor: highlightColorMap[settings.highlightColor] || highlightColorMap.yellow,
-	});
-	let isOverhanging = $derived(
-		isTocOverhanging({
-			isEditing,
-			isSplit,
-			tocSide: settings.tocSide,
-			splitEditorSide: settings.splitEditorSide,
-			isFullWidth: settings.previewFullWidth,
-			viewerWidth,
-			previewContentWidth,
-			tocWidth: settings.tocWidth,
-		}),
-	);
+	let previewAppearance = $derived(previewAppearanceFrom(settings));
+	let layout = $derived(previewLayout(settings, { isEditing, isSplit, viewerWidth }));
+	let isOverhanging = $derived(layout.isOverhanging);
 
 	/**
 	 * Reaching past a floating outline to touch what it is covering is a request
@@ -424,15 +377,9 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	 * sidebar, and one sitting in the margin is not in anybody's way.
 	 */
 	$effect(() => {
-		if (!settings.showToc || settings.pinnedToc || !isOverhanging) return;
+		if (!settings.showToc || !tocAutoCollapses(() => isOverhanging, settings.pinnedToc)) return;
 		const dismiss = (e: PointerEvent) => {
-			const target = e.target as Node | null;
-			if (!target) return;
-			// The toggle button owns its own click; closing here as well would
-			// open and shut the panel in one gesture. Anything inside the panel —
-			// the resize handle included — is use, not dismissal.
-			if (tocWrapperEl?.contains(target) || tocToggleEl?.contains(target)) return;
-			settings.showToc = false;
+			if (dismissesToc(e.target as Node | null, tocWrapperEl, tocToggleEl)) settings.showToc = false;
 		};
 		// Capture, so a handler that stops propagation on its way up cannot leave
 		// the outline stranded over the text.
@@ -440,7 +387,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		return () => window.removeEventListener('pointerdown', dismiss, { capture: true });
 	});
 
-	import { loadVscodeTheme, clearVscodeTheme } from './utils/theme';
+	import { followTheme } from './utils/themeEffect.svelte.js';
 
 	onMount(() => {
 		// Clear the forced background color from app.html
@@ -463,80 +410,18 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		invoke('save_theme', { theme: appearance }).catch(console.error);
 	}
 
-	$effect(() => {
-		// Persistence and cross-window sync belong to the settings store; this
-		// effect is only the part that cannot: applying the theme to the document.
-		const theme = settings.theme;
-
-		// Mermaid bakes its colours into the SVG it produces, so the diagrams have
-		// to be drawn again; `renderRichContent` finds the ones drawn for another
-		// theme. No `roots`, because the whole article is what changed appearance
-		// — including the hosts of tabs that are not on screen, which the reader
-		// switches back to without anything else re-rendering them.
-		//
-		// Called from each branch rather than once at the end, because the
-		// `vscode:` branch does not know its own appearance until
-		// `parseAndApplyVscodeTheme` has published `dataset.themeType`, and that
-		// is what `currentMermaidTheme` reads. Calling here would have re-drawn
-		// every diagram in the theme being replaced.
-		//
-		// `untrack` for the reason #740 established: `renderRichContent` reads
-		// reactive state before its first `await`, so a tracked call makes this
-		// effect re-run on unrelated changes — re-enriching every open tab's
-		// host on top of the pass the patch effect owns.
-		const recolourDiagrams = () => untrack(() => { if (markdownBody) renderRichContent(); });
-
-		if (theme === 'system' || theme === 'light' || theme === 'dark') {
-			if (theme === 'system') {
-				delete document.documentElement.dataset.theme;
-				delete document.documentElement.dataset.themeType;
-			} else {
-				document.documentElement.dataset.theme = theme;
-				document.documentElement.dataset.themeType = theme;
-			}
-			clearVscodeTheme();
-			saveStartupAppearance(theme);
-			recolourDiagrams();
-			// No Monaco write here. It used to set `vs`/`vs-dark` through the
-			// `monaco` global, and because a child's effects run before its
-			// parent's it landed AFTER `Editor`'s own — stripping the editor of
-			// `app-theme-*` on every theme change. `editorTheme.ts`'s
-			// `monacoThemeName` is the one answer now, and `Editor` is the only
-			// pane that asks it; with no editor mounted there is nothing to
-			// paint, and a later mount reads the theme from the same seam.
-		} else {
-			const name = theme.replace('vscode:', '');
-			loadVscodeTheme(name, (name) => invoke<string>('read_vscode_theme', { name })).then((applied) => {
-				// A later choice replaced this one while it loaded; that choice
-				// owns the window now.
-				if (!applied) return;
-				// `parseAndApplyVscodeTheme` decides dark vs. light from the theme's
-				// own `type` field and publishes it here.
-				saveStartupAppearance(document.documentElement.dataset.themeType === 'dark' ? 'dark' : 'light');
-				recolourDiagrams();
-			}).catch(e => {
-				console.error("Failed to load vscode theme", e);
-				settings.theme = 'system';
-			});
-		}
+	followTheme(() => settings.theme, {
+		saveStartupAppearance,
+		readVscodeTheme: (name) => invoke<string>('read_vscode_theme', { name }),
+		recolourDiagrams: () => { if (markdownBody) renderRichContent(); },
+		onLoadFailed: (e) => {
+			console.error("Failed to load vscode theme", e);
+			settings.theme = 'system';
+		},
 	});
 
 	let tooltip = $state({ show: false, text: '', shortcut: '', html: '', isFootnote: false, x: 0, y: 0, align: 'top' as 'top' | 'right' | 'left' | 'below' });
-	let modalState = $state<{
-		show: boolean;
-		title: string;
-		message: string;
-		kind: 'info' | 'warning' | 'error';
-		showSave: boolean;
-		resolve: ((v: 'save' | 'discard' | 'cancel') => void) | null;
-	}>({
-		show: false,
-		title: '',
-		message: '',
-		kind: 'info',
-		showSave: false,
-		resolve: null,
-	});
+	const modalState = new ChoiceDialog();
 
 	let docContextMenu = $state<{
 		show: boolean;
@@ -551,21 +436,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	});
 
 	function askCustom(message: string, options: { title: string; kind: 'info' | 'warning' | 'error'; showSave?: boolean }): Promise<'save' | 'discard' | 'cancel'> {
-		// A second question replaces the first dialog, so the first caller is
-		// answered 'cancel' rather than left awaiting a resolver that is about to
-		// be overwritten — a close walk left that way never finished, and the
-		// window could not be closed again. An already-answered one ignores it.
-		modalState.resolve?.('cancel');
-		return new Promise((resolve) => {
-			modalState = {
-				show: true,
-				title: options.title,
-				message,
-				kind: options.kind,
-				showSave: options.showSave ?? false,
-				resolve,
-			};
-		});
+		return modalState.ask(message, options);
 	}
 
 	// window.prompt() is a silent no-op inside the webview (wry does not
@@ -597,30 +468,20 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	}
 
 	function closeModal(choice: 'save' | 'cancel') {
-		modalState.resolve?.(choice);
-		modalState.show = false;
+		modalState.close(choice);
 	}
 
-	// Self-contained rather than closeModal('discard'): shortcuts.checks.test.ts
-	// lifts it on its own.
 	function handleModalConfirm() {
-		if (modalState.resolve) modalState.resolve('discard');
-		modalState.show = false;
+		modalState.close('discard');
 	}
 
 	function handleSplitterKeyDown(e: KeyboardEvent) {
 		const activeTab = tabManager.activeTab;
 		if (!activeTab || !tabManager.activeTabId) return;
 
-		// The same step the bar takes under the pointer, in the same units, so
-		// `splitRatioAfterMove` is the only thing that knows which way is wider.
-		const step = e.key === 'ArrowLeft' ? -0.05 : e.key === 'ArrowRight' ? 0.05 : 0;
-		if (step === 0) return;
-
-		tabManager.setSplitRatio(
-			tabManager.activeTabId,
-			splitRatioAfterMove(activeTab.splitRatio, step, settings.splitEditorSide),
-		);
+		const next = splitRatioAfterKey(activeTab.splitRatio, e.key, settings.splitEditorSide);
+		if (next === null) return;
+		tabManager.setSplitRatio(tabManager.activeTabId, next);
 	}
 
 	function handleTocResizeKeyDown(e: KeyboardEvent) {
@@ -641,10 +502,6 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		}
 	}
 
-	// True while the window-close walk is showing per-tab dialogs; the native
-	// red button is not blocked by the dialog overlay, so this keeps a second
-	// close request from starting a competing walk.
-	let isCloseWalkActive = false;
 	let identifyFlash = $state('');
 	let identifyFlashTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -698,47 +555,27 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		}
 	}
 
-	/**
-	 * Hot exit: keep unsaved buffers instead of asking. Pending auto-saves write
-	 * their files first; a refused or failed save stays dirty and is kept. False
-	 * when the backup cannot be written or `applies` says no, and the caller asks
-	 * as usual. `applies` runs inside the walk guard, so a second close is refused meanwhile.
-	 */
-	async function keepUnsavedForExit(applies = async () => true): Promise<boolean> {
-		if (!recoveryReady) return false;
-		isCloseWalkActive = true;
-		try {
-			if (!(await applies())) return false;
-			if (settings.autoSave) {
-				for (const tab of tabManager.tabs.filter((t) => t.isDirty && t.path !== '')) await saveSilently(tab.id);
-			}
-			if (!(await unsavedRecovery.flush(recoverySnapshot(tabManager.tabs)))) return false;
-		} finally {
-			isCloseWalkActive = false;
-		}
-		await savePinnedTagIfNeeded();
-		await persistWindowState(true);
-		return true;
-	}
-
 	// The snapshot: window shape only, never document content. `folderRoot`
 	// rides along so each window gets its own folder back.
 	const windowStateJson = () => tabManager.serializeState({ folderRoot: folderManager.root });
 	let restoredFolder: string | null = null;
 
+	const transferOptions = createTransferOptions({
+		editorPane: () => editorPane,
+		windowStateJson,
+		isCloseWalkActive: () => windowExit.isCloseWalkActive(),
+		isDisposed: () => isDisposed,
+		renderPreview: renderTabPreviewFromRaw,
+		restoreReadingPosition: (tab) => {
+			if (markdownBody) restorePreviewReadingPosition(markdownBody, tab, getPreviewScrollMax(markdownBody), measurePreviewBox);
+		},
+	});
+
 	const windowSession = createWindowSession({
 		windowStateKey: WINDOW_STATE_KEY,
 		legacyStateKey: LEGACY_STATE_KEY,
 		restoreInProgressKey: RESTORE_IN_PROGRESS_KEY,
-		serializeState: () => {
-			// Same reason as `transferPayload` below, at a different moment: this
-			// runs at close and at each checkpoint with the editor still mounted,
-			// so the tab being edited would be persisted at the position it held
-			// when the editor last came down. Only the active tab can be the one
-			// the editor holds.
-			if (tabManager.activeTabId) editorPane?.flushPositionTo(tabManager.activeTabId);
-			return windowStateJson();
-		},
+		serializeState: transferOptions.serializeState,
 		shouldRestoreState: () => settings.restoreStateOnReopen,
 		isDisposed: () => isDisposed,
 		restoreState: (json) => {
@@ -748,87 +585,11 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		restoredTabs: () => tabManager.tabs.map((tab) => ({ id: tab.id, path: tab.path })),
 		loadRestoredTab: (tabId) => documentSession.readRestoredTab(tabId),
 		dropRestoredTab: (tabId) => tabManager.closeTab(tabId),
-		// A partially loaded buffer must never be handed to another window.
-		// The transfer payload has no field for "incomplete" (see
-		// tabTransfer.ts) and the destination rebuilds the tab from the
-		// payload alone, so the arriving copy would look authoritative and its
-		// auto-save would truncate the file. handleDetach and moveTabToWindow
-		// complete the buffer first; these predicates are the backstop.
-		canTransfer: (tabId) => {
-			const tab = tabManager.tabs.find((item) => item.id === tabId);
-			return !isCloseWalkActive && tab !== undefined && !isHomePath(tab.path) && !tab.isTruncated;
-		},
-		canDetach: (tabId) => {
-			const tab = tabManager.tabs.find((item) => item.id === tabId);
-			return !isCloseWalkActive && tab !== undefined && !isHomePath(tab.path) && !tab.isTruncated && tabManager.tabs.length >= 2;
-		},
-		transferPayload: (tabId) => {
-			const tab = tabManager.tabs.find((item) => item.id === tabId);
-			if (!tab) throw new Error('Tab disappeared before transfer');
-			// The snapshot carries the reading position and is taken here,
-			// synchronously, with the editor still mounted — so a tab being
-			// edited would travel with the position from its last teardown, and a
-			// tab opened straight into edit mode with 0. The preview writes its
-			// own fields on every scroll and needs nothing; this is edit mode's
-			// equivalent, and it is a no-op for any tab the editor is not on.
-			editorPane?.flushPositionTo(tabId);
-			// The other half of the same problem: the flush can only speak for
-			// the tab the editor is holding, and any other tab can be sent from
-			// here too — the tab context menu names one, and `mergeSelfInto`
-			// walks all of them. `editorViewState` is what covers a background
-			// edit-mode tab in memory and it is excluded from the payload, so
-			// the anchor is recovered from it before it is dropped.
-			return JSON.stringify({
-				...snapshotTab(tab),
-				anchorLine: outgoingTabAnchorLine(tab, tabManager.activeTabId),
-			});
-		},
+		canTransfer: transferOptions.canTransfer,
+		canDetach: transferOptions.canDetach,
+		transferPayload: transferOptions.transferPayload,
 		onTransferClaimed: (tabId) => tabManager.closeTab(tabId),
-		acceptTransferredTab: async (snapshot) => {
-			// The tab has to exist before it can be rendered, which leaves a
-			// window where this side owns a document the source still shows.
-			// Anything that goes wrong from here must undo the insert, or the
-			// same file stays open in both windows with two auto-save timers
-			// writing over each other.
-			const id = tabManager.insertTransferredTab(snapshot);
-			try {
-				const transferred = tabManager.tabs.find((tab) => tab.id === id);
-				if (!transferred) return null;
-				await renderTabPreviewFromRaw(transferred);
-				if (isDisposed) {
-					tabManager.closeTab(id);
-					return null;
-				}
-				// The reading position travels with the tab, and until here nothing
-				// put it back. `insertTransferredTab` activates the tab
-				// synchronously, while its `content` is still `''`; the restore
-				// effect below runs on that activation against a host with no
-				// document in it, finds no anchor and no scroll range, and the
-				// document the reader left arrives afterwards at the top. That effect
-				// cannot cover this by depending on the render — it also runs while
-				// the reader is typing in split view, where a per-render dependency
-				// would drag the preview back on every debounce — so the arrival
-				// asks again, now that `renderTabPreviewFromRaw` has awaited the
-				// patch and the host holds the document.
-				//
-				// Guarded on the tab still being the active one: only the active
-				// host is displayed, and `markdownBody` is the article all of them
-				// share, so scrolling it for a tab the user has since switched away
-				// from would move somebody else's document.
-				if (markdownBody && tabManager.activeTabId === id) {
-					restorePreviewReadingPosition(
-						markdownBody,
-						transferred,
-						getPreviewScrollMax(markdownBody),
-						measurePreviewBox,
-					);
-				}
-				return id;
-			} catch (error) {
-				tabManager.closeTab(id);
-				throw error;
-			}
-		},
+		acceptTransferredTab: transferOptions.acceptTransferredTab,
 		onError: (message, error) => {
 			console.error(message, error);
 			addToast(`${message}: ${String(error)}`, 'error');
@@ -845,6 +606,11 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 					: t('toast.restoreInterrupted', settings.language),
 				'warning',
 			),
+	});
+	const { handleDetach, moveTabToWindow } = createTabMovers({
+		ensureFullContent: (tabId) => documentSession.ensureFullContent(tabId),
+		onPartialDocument: () => addToast(t('toast.partialDocument', settings.language), 'error'),
+		session: windowSession,
 	});
 
 	// The session is recorded as it changes, so a crash or kill brings this
@@ -864,19 +630,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		windowSession.record(untrack(windowStateJson));
 	});
 
-	// A window opened for a pinned group is entered in the registry under the
-	// group's name when it is created. Reporting before it has adopted the
-	// group would clear that name and let a second click open the group again.
-	let windowMetaReady = $state(pinnedTagFromWindowLabel(appWindow.label) === null);
-	$effect(() => {
-		if (!windowMetaReady) return;
-		invoke('set_window_meta', {
-			tagName: tabManager.windowTag?.name ?? null,
-			tagColor: tabManager.windowTag?.color ?? null,
-			activeTabTitle: tabManager.activeTab?.title ?? '',
-			tabCount: tabManager.tabs.length,
-		}).catch(() => {});
-	});
+	const windowMeta = reportWindowMeta(tabManager, pinnedTagFromWindowLabel(appWindow.label) === null);
 
 	$effect(() => {
 		const tag = tabManager.windowTag;
@@ -889,59 +643,19 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		pinnedTags = (await invoke('list_pinned_tags')) as typeof pinnedTags;
 	}
 
-	// The files the close review started from. It can close tabs, and the
-	// close it re-triggers settles again, so both saves use this list.
-	let pinFilesAtClose: string[] | null = null;
-
-	function openFilePaths() {
-		return tabManager.tabs.filter((tab) => hasRealFilePath(tab.path)).map((tab) => tab.path);
-	}
-
-	/**
-	 * Every path that ends a window saves the pin before it closes tabs. An
-	 * empty window says nothing about the group, so it never overwrites it.
-	 * It only refreshes the entry: another window may have unpinned the tag.
-	 */
-	async function savePinnedTagIfNeeded() {
-		const tag = tabManager.windowTag;
-		if (!tag?.pinned) return;
-		const files = pinFilesAtClose ?? openFilePaths();
-		if (files.length === 0) return;
-		const pinned = await invoke('update_pinned_tag', { name: tag.name, color: tag.color, files });
-		if (!pinned) tabManager.setWindowTag({ ...tag, pinned: false });
-	}
-
-	async function openPinnedTag(tag: { name: string; color: string; files: string[] }) {
-		// Two windows sharing a tag share one pin entry, and the last to save wins.
-		const holder = await pinnedTagHolder(tag.name, appWindow.label);
-		if (holder) {
-			await invoke('focus_window', { label: holder });
-			return;
-		}
-		// Tabs already here belong to this window's own group. The pinned one
-		// opens in a window of its own, which adopts it from its label.
-		if (tabManager.tabs.some((tab) => !isHomePath(tab.path))) {
-			await invoke('create_transfer_window', { token: pinnedWindowToken(tag.name, Date.now()), tagName: tag.name });
-			return;
-		}
-		tabManager.setWindowTag({ ...tag, pinned: true });
-		for (const file of tag.files) await loadMarkdown(file);
-		showHome = false;
-	}
-
 	async function unpinTagFromHome(name: string) {
 		await invoke('remove_pinned_tag', { name });
 		if (tabManager.windowTag?.name === name) tabManager.setWindowTag({ ...tabManager.windowTag, pinned: false });
 		await refreshPinnedTags();
 	}
 
-	// Same condition as the template's HomePage gate: an empty window or the
-	// home tab shows Home without `showHome`, which is the cold-start case.
+	// The template's HomePage gate: an empty window or the home tab shows Home
+	// without `showHome`, which is the cold-start case.
 	// Reading the window tag re-runs this when the title bar pins or unpins it.
 	// The pin's IPC is sent first and sync commands run in order, so the list sees it.
 	$effect(() => {
 		void tabManager.windowTag?.pinned;
-		if (showHome || !tabManager.activeTab || isHomePath(tabManager.activeTab.path)) refreshPinnedTags().catch(console.error);
+		if (showsHomeScreen(() => tabManager.activeTab, showHome)) refreshPinnedTags().catch(console.error);
 	});
 
 	const documentSession = createDocumentSession({
@@ -965,7 +679,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			console.error(message, error);
 			addToast(`${message}: ${String(error)}`, 'error');
 		},
-		onDiskChangedUnderSave: noteExternalChangeConflict,
+		onDiskChangedUnderSave: (id) => externalChange.noteExternalChangeConflict(id),
 		cancelPendingAutoSave,
 		// Two questions, one dialog. With the file untouched, Save means "write
 		// what I typed" and the ordinary wording is right. With the disk moved
@@ -991,6 +705,70 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		onPartialCopySaved: () => addToast(t('toast.partialCopySaved', settings.language), 'info'),
 	});
 
+	const externalChange = createExternalChange({
+		tabManager,
+		settings,
+		documentSession,
+		loadMarkdown,
+		canCloseTab,
+		readFile: (path) => invoke('read_file_content_checked', { path }),
+		editorLanguageFor,
+		addToast,
+		t,
+	});
+	const {
+		saveContent,
+		saveActiveTab,
+		saveSilently,
+		flushBeforeLeavingEditableMode,
+		hasExternalChangeConflict,
+		noteExternalChangeConflict,
+		resolveExternalChangeByReloading,
+		reloadFromDisk,
+		compareExternalChange,
+		resolveExternalChangeByKeepingBuffer,
+	} = externalChange;
+
+	const viewMode = createViewMode({
+		tabManager,
+		settings,
+		documentSession,
+		flushBeforeLeavingEditableMode,
+		readFile: (path) => invoke('read_file_content_checked', { path }),
+		renderTabPreviewFromRaw,
+		tick,
+		addToast,
+		t,
+		get editorPane() {
+			return editorPane;
+		},
+		get markdownBody() {
+			return markdownBody;
+		},
+		get previewBlocks() {
+			return previewBlocks;
+		},
+		get lineCoords() {
+			return lineCoords;
+		},
+		readRendererLine: (line) => readRendererLine(line),
+		getPreviewScrollSyncPosition,
+		scrollPreviewToSyncPosition,
+		getPreviewScrollAnchor,
+	});
+	const {
+		handleEditorCursor,
+		placePreviewCursor,
+		handleEditorScrollSync,
+		followPreviewScroll,
+		syncEditorToPreviewScroll,
+		toggleEdit,
+		toggleEditView,
+		editSourceRangeAt,
+		toggleSplitView,
+		setViewMode,
+	} = viewMode;
+
 	// Persisted through Rust, not localStorage: setItem is an async message
 	// to the WebKit storage process that dies in transit when the last
 	// window's close ends the process (reproduced in QA as "close secondary
@@ -1008,132 +786,35 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		else if (settings.restoreStateOnReopen) await windowSession.persistState(true);
 	}
 
-	/**
-	 * The save/discard close, used when "Restore unsaved changes on launch" is off, when
-	 * closing one of several windows, or when the backup cannot be written
-	 * (`keepUnsavedForExit` runs first otherwise).
-	 * Resolve this window's unsaved tabs, then write the restore snapshot: the
-	 * work that has to happen before the window goes away. False when the reader
-	 * cancelled, and nothing has been written.
-	 *
-	 * The close button and the in-app update both run it. An update ends the
-	 * process without closing a window — the Windows updater exits inside
-	 * `downloadAndInstall`, `relaunch()` requests an exit elsewhere — so
-	 * CloseRequested never fires, and both jobs used to go down with it (#761).
-	 */
-	async function settleForExit(remember: () => Promise<boolean>): Promise<boolean> {
-		// Unsaved content and session restore are separate concerns: dirty tabs
-		// are resolved FIRST through the per-tab dialogs, then the restore
-		// snapshot records window state only (open files, active tab, edit mode,
-		// split, scroll) — it never carries document content.
-		const dirtyTabs = tabManager.tabs.filter((t) => t.isDirty);
-		if (dirtyTabs.length > 0) {
-			isCloseWalkActive = true;
-			pinFilesAtClose ??= openFilePaths();
-			// The walk's dialogs are in-app modals inside THIS window: with
-			// multiple windows, another window may be covering it and the review
-			// would be invisible. Bring the reviewing window to the front first.
-			invoke('show_window').catch(console.error);
-			try {
-				// Auto-save without confirmation: silently save every dirty tab
-				// that has a real path. Untitled tabs need a Save dialog, so the
-				// walk below handles them. A failed silent save is surfaced and its
-				// tab also goes to the walk. `saveContent` cancels each tab's pending
-				// timer itself, so no writer here can be raced by its own debounce.
-				// A tab whose file changed underneath is refused rather than
-				// overwritten, and the walk asks the changed-on-disk question.
-				if (settings.autoSave) {
-					for (const tab of dirtyTabs.filter((t) => t.path !== '')) {
-						const ok = await saveSilently(tab.id);
-						if (!ok && hasExternalChangeConflict(tab.id)) continue;
-						if (!ok) {
-							addToast(t('toast.autoSaveFailed', settings.language), 'error');
-							break;
-						}
-					}
-				}
-
-				// Close review (issue #189): walk the remaining dirty tabs one at a
-				// time — activate each and run the same localized unsaved-changes
-				// dialog a single tab close shows. Cancel stops the walk and keeps
-				// the window open. Strict tab-strip order (left to right) so the
-				// sequence is predictable; numbered untitled titles let the dialog
-				// name each tab. Re-find every round — a save can leave a tab dirty
-				// again (TOCTOU) and tabs can change while a dialog is up.
-				const resolved = await reviewDirtyTabs({
-					nextDirtyTab: () => tabManager.tabs.find((t) => t.isDirty),
-					setActive: (id) => tabManager.setActive(id),
-					settle: tick,
-					canCloseTab,
-					closeTab: (id) => tabManager.closeTab(id),
-					// Resolved tabs (saved, or reverted by Don't Save) stay open for
-					// the window-state snapshot when restore is enabled; untitled
-					// tabs have nothing to restore, and with restore off the red
-					// button closes tabs one by one.
-					shouldCloseAfterResolving: (tab) =>
-						!settings.restoreStateOnReopen || tab.path === '',
-				});
-				if (!resolved) {
-					pinFilesAtClose = null;
-					return false;
-				}
-			} finally {
-				isCloseWalkActive = false;
-			}
-		}
-
-		// Session is clean now; record the window state for restore. Awaited:
-		// the caller holds the exit until the Rust write returns, so the process
-		// cannot exit under the snapshot.
-		await savePinnedTagIfNeeded();
-		// The re-triggered close finds nothing to review and uses the list last.
-		if (dirtyTabs.length === 0) pinFilesAtClose = null;
-		// Asked now, not when the close began: the review above can take minutes.
-		await persistWindowState(await remember());
-		return true;
-	}
-
-	/**
-	 * The update's settle. No re-triggered close follows it: the process exits,
-	 * or the install fails and the window stays. Either way the review's list
-	 * has been saved, and kept it would outlive a failed install into the next
-	 * last-tab close, merge or Close Tag.
-	 */
-	async function settleForUpdate(): Promise<boolean> {
-		if (settings.persistOpenEditors && (await keepUnsavedForExit())) return true;
-		try {
-			// The process exits with every window, so this one is remembered.
-			return await settleForExit(async () => true);
-		} finally {
-			pinFilesAtClose = null;
-		}
-	}
-
-	/**
-	 * Quit is the red button applied to every window. Each one runs its own
-	 * `onCloseRequested`: reviews its unsaved tabs, writes its own restore
-	 * snapshot, and closes.
-	 *
-	 * It used to discard the snapshot instead, so ⌘Q and the red button
-	 * disagreed about whether the session came back — and the dialog that
-	 * explained the difference only appeared when a tab was dirty, which is
-	 * not the path most people take (#390). It also closed nothing but the
-	 * focused window, so quitting with two windows open did not quit.
-	 *
-	 * Every other window is asked at once rather than one after another:
-	 * `close()` resolves when the request is sent, not when the window is
-	 * gone, and there is no reply saying whether the reader cancelled. Two
-	 * windows with unsaved work therefore show their own dialogs side by side,
-	 * each still guarding its own buffers.
-	 */
-	async function appExit() {
-		// Quit keeps unsaved changes in every window, not only the last one.
-		await invoke('set_quitting', { quitting: true }).catch(console.error);
-		for (const other of await getAllWindows()) {
-			if (other.label !== appWindow.label) await other.close();
-		}
-		await appWindow.close();
-	}
+	const windowExit = createWindowExit({
+		tabManager,
+		settings,
+		appWindow,
+		allWindows: getAllWindows,
+		recovery: {
+			isReady: () => recoveryReady,
+			keep: () => unsavedRecovery.flush(recoverySnapshot(tabManager.tabs)),
+			drop: () => unsavedRecovery.flush('[]'),
+		},
+		persistWindowState,
+		canCloseTab,
+		saveSilently,
+		hasExternalChangeConflict,
+		onAutoSaveFailed: () => addToast(t('toast.autoSaveFailed', settings.language), 'error'),
+		settle: tick,
+		loadMarkdown,
+		setShowHome: (value) => (showHome = value),
+		moveTabToWindow,
+	});
+	const {
+		savePinnedTagIfNeeded,
+		openPinnedTag,
+		settleForUpdate,
+		appExit,
+		destroyWindowAfterTabsClosed,
+		closeTabAndWindowIfLast,
+		mergeSelfInto,
+	} = windowExit;
 
 	/**
 	 * A tab switch must not animate. Switching to a tab in another mode changes
@@ -1147,11 +828,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	$effect(() => {
 		const _ = tabManager.activeTabId;
 		const container = untrack(() => layoutContainerEl);
-		if (container) {
-			container.classList.add('tab-switching');
-			void container.offsetHeight;
-			container.classList.remove('tab-switching');
-		}
+		if (container) commitWithoutTransitions(container);
 		showHome = false;
 		findOpen = false;
 	});
@@ -1186,16 +863,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		});
 	});
 
-	// Watched whether or not Auto-Reload is on: an edit made elsewhere under
-	// unsaved changes is reported when it happens, not at the next save.
-	// Auto-Reload only decides whether a clean tab reloads.
-	$effect(() => {
-		if (currentFile) {
-			invoke('watch_file', { path: currentFile }).catch(console.error);
-		} else {
-			invoke('unwatch_file').catch(console.error);
-		}
-	});
+	followActiveFile(() => currentFile);
 
 	// The preview and the export run the same filter in opposite orders, on
 	// purpose. The export sanitizes the renderer output first and processes
@@ -1234,10 +902,6 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		return `frontmatter-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 	}
 
-	function frontMatterFieldStateKey(field: FrontMatterField) {
-		return `${frontMatterPanelKey}:${field.key}`;
-	}
-
 	function tagsEqual(left: string[], right: string[]) {
 		return left.length === right.length && left.every((value, index) => value === right[index]);
 	}
@@ -1254,7 +918,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	}
 
 	function clearFrontMatterEditError(field: FrontMatterField) {
-		delete frontMatterEditErrors[frontMatterFieldStateKey(field)];
+		frontMatterFields.clearEditError(field);
 	}
 
 	// `nextValue` runs inside the try so a parse error lands on the field.
@@ -1265,74 +929,49 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			clearFrontMatterEditError(field);
 			await renderTabPreviewFromRaw(tab);
 		} catch (error) {
-			frontMatterEditErrors = {
-				...frontMatterEditErrors,
-				[frontMatterFieldStateKey(field)]: String(error),
-			};
+			frontMatterFields.setEditError(field, error);
 		}
 	}
 
-	async function handleFrontMatterEdit(field: FrontMatterField, value: string) {
-		const tab = tabManager.activeTab;
-		if (!tab) return;
-		// Front matter is editable from reading mode, which a large file can
-		// reach while its buffer is still the preview slice. Rewriting that
-		// slice and saving it would drop the rest of the document.
-		if (!(await documentSession.ensureFullContent(tab.id))) {
-			addToast(t('toast.partialDocument', settings.language), 'error');
-			return;
-		}
-		await applyFrontMatter(tab, field, () => parseFrontMatterEditableValue(field, value));
-	}
+	const { handleFrontMatterEdit, handleFrontMatterListChange } = createFrontMatterEdit({
+		tabManager,
+		settings,
+		documentSession,
+		addToast,
+		t,
+		applyFrontMatter,
+	});
 
 	function getFrontMatterTagDraft(field: FrontMatterField) {
-		return frontMatterTagDrafts[frontMatterFieldStateKey(field)] ?? '';
+		return frontMatterFields.tagDraft(field);
 	}
 
 	function setFrontMatterTagDraft(field: FrontMatterField, value: string) {
-		frontMatterTagDrafts[frontMatterFieldStateKey(field)] = value;
-		clearFrontMatterEditError(field);
+		frontMatterFields.setTagDraft(field, value);
 	}
 
 	function clearFrontMatterTagDraft(field: FrontMatterField) {
-		delete frontMatterTagDrafts[frontMatterFieldStateKey(field)];
+		frontMatterFields.clearTagDraft(field);
 	}
 
 	function getFrontMatterTagEditIndex(field: FrontMatterField) {
-		return frontMatterTagEditIndexes[frontMatterFieldStateKey(field)] ?? null;
+		return frontMatterFields.tagEditIndex(field);
 	}
 
 	function getFrontMatterTagEditDraft(field: FrontMatterField, fallback: string) {
-		return frontMatterTagEditDrafts[frontMatterFieldStateKey(field)] ?? fallback;
+		return frontMatterFields.tagEditDraft(field, fallback);
 	}
 
 	function setFrontMatterTagEditDraft(field: FrontMatterField, value: string) {
-		frontMatterTagEditDrafts[frontMatterFieldStateKey(field)] = value;
-		clearFrontMatterEditError(field);
+		frontMatterFields.setTagEditDraft(field, value);
 	}
 
 	function startFrontMatterTagEdit(field: FrontMatterField, index: number, value: string) {
-		const key = frontMatterFieldStateKey(field);
-		frontMatterTagEditIndexes[key] = index;
-		frontMatterTagEditDrafts[key] = value;
-		clearFrontMatterEditError(field);
+		frontMatterFields.startTagEdit(field, index, value);
 	}
 
 	function clearFrontMatterTagEdit(field: FrontMatterField) {
-		const key = frontMatterFieldStateKey(field);
-		delete frontMatterTagEditIndexes[key];
-		delete frontMatterTagEditDrafts[key];
-	}
-
-	async function handleFrontMatterListChange(field: FrontMatterField, nextItems: string[]) {
-		const tab = tabManager.activeTab;
-		if (!tab) return;
-		// Same partial-buffer guard as handleFrontMatterEdit.
-		if (!(await documentSession.ensureFullContent(tab.id))) {
-			addToast(t('toast.partialDocument', settings.language), 'error');
-			return;
-		}
-		await applyFrontMatter(tab, field, () => nextItems);
+		frontMatterFields.clearTagEdit(field);
 	}
 
 	async function commitFrontMatterTagAdd(field: FrontMatterField) {
@@ -1438,31 +1077,6 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	}
 
 	/**
-	 * How many documents the preview DOM has been given, as a number anything
-	 * downstream of the render can wait on.
-	 *
-	 * `htmlContent` looks like the same signal and is not. It says a document
-	 * has been *rendered*, and the outline used to take it as saying the article
-	 * now *holds* that document — which is true only if the patch below has
-	 * already run. On a mount it has not: Svelte runs a child component's
-	 * effects before its parent's, so `<Toc>` scanned the article in the same
-	 * flush, one step ahead of the patch that fills it, and found nothing. The
-	 * string does not change again, so nothing asked it to look twice and the
-	 * outline stayed empty until it was unmounted and remounted.
-	 *
-	 * A pinned outline is the one that never gets that remount, which is why it
-	 * was the only place the bug was visible: an overhanging floating outline
-	 * closes itself, and reopening it builds a new component against a DOM that
-	 * is by then complete.
-	 *
-	 * The counter is kept twice on purpose — `previewPatches` is the plain one
-	 * this effect increments, so the `$state` is only ever written here and
-	 * never read, and the effect cannot schedule itself.
-	 */
-	let previewRevision = $state(0);
-	let previewPatches = 0;
-
-	/**
 	 * The one place a rendered document becomes preview DOM: patch, then enrich
 	 * only what the patch inserted.
 	 *
@@ -1471,15 +1085,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	 * restores the reading position again, because KaTeX and Mermaid can push
 	 * the anchor down by hundreds of pixels.
 	 */
-	$effect(() => {
-		const host = previewBlocks;
-		if (!host) {
-			// Still a read, so a document that lands before the element exists
-			// re-runs this rather than being missed.
-			void htmlContent;
-			return;
-		}
-
+	const previewPatch = followPreviewPatch(() => previewBlocks, () => htmlContent, (host, htmlContent) => {
 		// This document is injected into the app's own document, so it runs the
 		// same policy the export runs — the one place a document is untrusted
 		// must not have its own private copy of the rules. The preview used to
@@ -1492,88 +1098,31 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		// ./utils/sanitize.ts for the policy itself, and renderMarkdownPreview
 		// for why this path sanitizes last.
 		//
-		// A host that already holds this document — a tab being re-activated —
-		// is not sanitized and diffed again: every block would compare equal.
-		// The switch did change which host is displayed, which the anchor memos
-		// read, and the patch is what would have invalidated them.
-		const unchanged = patchedHtml.get(host) === htmlContent;
-		patchedHtml.set(host, htmlContent);
-		if (unchanged) invalidateAnchorMemos();
-		// Untracked: a fold toggle or a rename is not a new document.
-		const patch = unchanged
-			? { inserted: [], wrappers: [] }
-			: untrack(() => {
-					const tab = tabManager.activeTab;
-					return patchPreview(host, htmlContent, tab?.path ?? '', tab?.foldOverrides ?? NO_FOLD_OVERRIDES);
-				});
-		// Only the new blocks. `ResizeObserver.observe` on a target it is already
-		// watching re-registers it rather than doing nothing, and a fresh
-		// registration delivers an initial observation — so handing it the whole
-		// host would put back exactly the per-keystroke re-measure of every fold
-		// that keeping the observation alive removed.
-		for (const block of patch.inserted) foldLayout?.observe(block);
-		for (const wrapper of patch.wrappers) foldLayout?.observe(wrapper);
-		// A host's first enrichment is the cold start above: it waits for
-		// whichever libraries the document needs. A tab being re-activated
-		// patches to nothing, and its host is in the set from that first render.
-		const cold = patch.inserted.length > 0 && !enrichedHosts.has(host);
-		if (cold) enrichedHosts.add(host);
-		const enrichment = renderRichContent(patch.inserted);
-		if (cold) restoreAfterColdEnrichment(enrichment, tabManager.activeTabId);
-		previewRevision = ++previewPatches;
+		// Untracked inside patchHost: a fold toggle or a rename is not a new document.
+		const patch = patchHost(
+			host,
+			htmlContent,
+			() => {
+				const tab = tabManager.activeTab;
+				return { filePath: tab?.path ?? '', foldOverrides: tab?.foldOverrides ?? NO_FOLD_OVERRIDES };
+			},
+			(scope) => foldLayout.current?.observe(scope),
+		);
+		// A host's first enrichment is the cold start above: see `coldRestore`.
+		coldRestore.afterEnrichment(host, patch.inserted.length, renderRichContent(patch.inserted));
 	});
 
-	/**
-	 * The hosts whose document has been through `renderRichContent` at least
-	 * once. A `WeakMap`/`WeakSet` keyed on the container for the same reason
-	 * `states` in `previewPatch.ts` is: a host that Svelte destroys with its
-	 * tab takes its entry with it, so this cannot drift from the set of live
-	 * tabs the way a hand-kept registry can.
-	 */
-	const enrichedHosts = new WeakSet<HTMLElement>();
-	/** The `htmlContent` each host was last patched with. */
-	const patchedHtml = new WeakMap<HTMLElement, string>();
-
-	/**
-	 * Put the reader back where they were, once, after a cold start's enrichment
-	 * has changed the layout underneath them.
-	 *
-	 * Through `restorePreviewReadingPosition` — the same cascade the restore
-	 * effect runs, in the same order — because two sites consulting a tab's
-	 * three position fields in different orders are two answers for one tab.
-	 * That effect cannot do this itself: giving it a dependency on the render
-	 * would drag the preview back to the anchor on every debounced re-render
-	 * while the reader is typing in split view.
-	 *
-	 * Only for the tab that is still on screen. The enrichment is awaited, a
-	 * switch can happen inside it, and restoring another tab's position into the
-	 * article would move the document the reader is actually looking at.
-	 */
-	async function restoreAfterColdEnrichment(enrichment: Promise<void>, tabId: string | null) {
-		await enrichment;
-		await tick();
-		const body = markdownBody;
-		if (!body || !tabId || tabManager.activeTabId !== tabId) return;
-		const tab = tabManager.tabs.find((t) => t.id === tabId);
-		if (tab) restorePreviewReadingPosition(body, tab, getPreviewScrollMax(body), measurePreviewBox);
-	}
-
-	$effect(() => {
-		const host = previewBlocks;
-		if (!host || !hasPreviewPane) return;
-
-		// Keyed on the visible host only. A keystroke must not re-observe: a fresh
-		// `observe` reports at once and would re-measure every fold. The patch
-		// effect observes new blocks itself. A hidden host is not observed at all,
-		// because its boxes measure 0 (see `previewHosts`).
-		const observation = observeFoldLayout(host);
-		foldLayout = observation;
-
-		return () => {
-			observation.stop();
-			if (foldLayout === observation) foldLayout = null;
-		};
+	const coldRestore = createColdEnrichmentRestore({
+		tabManager,
+		tick,
+		get markdownBody() {
+			return markdownBody;
+		},
+		restore: (body, tab) => restorePreviewReadingPosition(body, tab, getPreviewScrollMax(body), measurePreviewBox),
 	});
+
+	// A hidden host is not observed: its boxes measure 0 (see `previewHosts`).
+	followFoldLayout(foldLayout, () => previewBlocks, () => hasPreviewPane);
 
 	// Re-apply find highlights after a render. The patch only replaces the blocks
 	// that changed, so most highlights now survive on their own nodes — but the
@@ -1624,16 +1173,6 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		return Math.max(0, target.scrollHeight - target.clientHeight);
 	}
 
-	function getPreviewFrontMatterScrollEnd(target: HTMLElement) {
-		const panel = target.querySelector<HTMLElement>('.frontmatter-panel');
-		if (!panel) return 0;
-
-		// In the same space as `target.scrollTop`, which is what it is compared
-		// against — see `measurePreviewBox`.
-		const box = measurePreviewBox(panel);
-		return Math.max(0, Math.min(getPreviewScrollMax(target), box.top + box.height));
-	}
-
 	// Not `element.offsetTop`: that is measured from the element's offset parent,
 	// and the preview is full of them — every `<table>` is the offset parent of
 	// its own rows and cells, and `.code-block-shell` is positioned. See
@@ -1647,128 +1186,26 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	}
 
 	function getPreviewScrollSyncPosition(target: HTMLElement): ScrollSyncPosition {
-		const position = getScrollSyncPositionFromPixels(
-			target.scrollTop,
-			getPreviewScrollMax(target),
-			getPreviewFrontMatterScrollEnd(target),
-		);
-
-		// Front matter is a rendered panel with no source range, so there is no
-		// line to send and the section ratio is the only thing that can carry it.
-		// This is the carve-out `scrollSync.ts` exists for, unchanged.
-		if (position.section !== 'body') return position;
-
-		const line = lineCoords.bufferLineAtPreviewOffset(target, target.scrollTop, measurePreviewBox);
-
-		return line === null ? position : { ...position, line };
+		return previewScrollSyncPosition(target, getPreviewScrollMax(target), lineCoords, measurePreviewBox);
 	}
 
 	function scrollPreviewToSyncPosition(position: ScrollSyncPosition) {
 		if (!markdownBody) return;
-
-		const scrollMax = getPreviewScrollMax(markdownBody);
-		let targetScroll: number | null = null;
-
-		if (position.section === 'body' && position.line !== undefined) {
-			const offset = lineCoords.previewOffsetForBufferLine(
-				markdownBody,
-				position.line,
-				measurePreviewBox,
-			);
-			if (offset !== null) targetScroll = offset;
-		}
-
-		if (targetScroll === null) {
-			targetScroll = getScrollTopForSyncPosition(
-				position,
-				scrollMax,
-				getPreviewFrontMatterScrollEnd(markdownBody),
-			);
-		}
-
-		// The line mapping can point past either end — the last block interpolates
-		// beyond the bottom of a preview that has no room left to scroll. Clamping
-		// before the threshold check is what keeps `isProgrammaticScroll` honest:
-		// an unreachable target fires no scroll event, and the flag would then be
-		// spent swallowing the reader's next real scroll instead.
-		targetScroll = Math.max(0, Math.min(scrollMax, targetScroll));
-
-		if (Math.abs(markdownBody.scrollTop - targetScroll) <= 5) return;
+		const targetScroll = getPreviewScrollTopForSyncPosition(
+			markdownBody,
+			getPreviewScrollMax(markdownBody),
+			position,
+			lineCoords,
+			measurePreviewBox,
+		);
+		if (targetScroll === null) return;
 
 		isProgrammaticScroll = true;
 		markdownBody.scrollTop = targetScroll;
 	}
 
-	/**
-	 * The source line the reader is on, for the outline to follow (#169).
-	 *
-	 * BOTH panes answer here, which is the point: the outline used to decide by
-	 * rendered box, and only the preview has those. A source line is something
-	 * either pane can produce — the editor sends one on every scroll (the same
-	 * position scroll sync uses, whether or not sync is on), and the preview
-	 * already computes one for the tab's reading position. One rule then picks
-	 * the entry, so the two panes cannot disagree about which heading is
-	 * current while both are on screen.
-	 */
-	let tocActiveLine = $state<RendererLine | null>(null);
-
-	/**
-	 * The one gate on `tocActiveLine`. With `settings.tocFollows` set to
-	 * 'cursor' and a cursor the reader can see (the editor is on screen, or
-	 * `settings.previewCursor` draws one the reader placed in the preview), only
-	 * the cursor moves the outline, and scrolling either pane leaves it where it
-	 * is. Otherwise the pane that scrolled last decides. In the preview alone
-	 * with `previewCursor` off, the editor's last cursor is kept for Ctrl+E but
-	 * not followed: nothing on screen would say why the outline stopped.
-	 *
-	 * A preview that is not on screen never decides: in the editor alone it is
-	 * still mounted at zero width, and its scroll events report lines from that
-	 * layout, which put the outline on the wrong heading after Ctrl+E (#799).
-	 * Nor does a preview Ctrl+E has just brought back, until
-	 * `restoreAfterLeavingEditor` has placed it: its scroll events before that
-	 * report the first headings.
-	 */
-	function followToc(from: 'cursor' | 'editor' | 'preview', line: RendererLine) {
-		const cursorLeads = settings.tocFollows === 'cursor' && (hasEditorPane || (settings.previewCursor && activeCursor !== null));
-		const previewSettled = hasPreviewPane && !previewPlacing;
-		const accepted = from === 'cursor' ? cursorLeads : !cursorLeads && (from === 'editor' || previewSettled);
-		if (accepted) tocActiveLine = line;
-	}
-
-	/** True from Ctrl+E out of the editor until the preview is placed. */
-	let previewPlacing = false;
-
-	/**
-	 * Each tab's cursor, shared by its two panes (#799): the editor's while it
-	 * is on screen, and with `settings.previewCursor` a click in the preview
-	 * moves it too. With that setting the preview draws it, and Ctrl+E puts the
-	 * editor's cursor on it. A tab only read so far has none.
-	 */
-	let cursorByTab = $state<Record<string, { line: BufferLine; column: number }>>({});
-	let activeCursor = $derived((tabManager.activeTabId && cursorByTab[tabManager.activeTabId]) || null);
-
-	function handleEditorCursor(line: BufferLine, column: number) {
-		if (tabManager.activeTabId) cursorByTab[tabManager.activeTabId] = { line, column };
-		followToc('cursor', lineCoords.toRendererLine(line));
-	}
-
 	let bufferLines = $derived(rawContent.split('\n'));
 	const readRendererLine: SourceLineReader = (line) => bufferLines[lineCoords.toBufferLine(asRendererLine(line)) - 1];
-
-	function placePreviewCursor(e: MouseEvent) {
-		const tabId = tabManager.activeTabId;
-		if (!tabId || !previewBlocks || !settings.previewCursor || e.detail !== 1) return;
-		if (!window.getSelection()?.isCollapsed) return;
-
-		const caret = document.caretRangeFromPoint(e.clientX, e.clientY);
-		const point = caret && sourceAtPoint(previewBlocks, { node: caret.startContainer, offset: caret.startOffset }, readRendererLine);
-		if (!point) return;
-
-		const line = lineCoords.toBufferLine(point.line);
-		cursorByTab[tabId] = { line, column: point.column };
-		followToc('cursor', point.line);
-		if (isSplit) editorPane?.setCursor(line, point.column);
-	}
 
 	/** The drawn cursor, in the article's scroll content; null while it isn't shown. */
 	let previewCursorBox = $state<{ top: number; left: number; height: number } | null>(null);
@@ -1789,7 +1226,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	});
 
 	$effect(() => {
-		const cursor = activeCursor;
+		const cursor = viewMode.activeCursor;
 		const shown = settings.previewCursor && cursor !== null && hasPreviewPane;
 		void htmlContent;
 		void previewLayoutVersion;
@@ -1915,66 +1352,8 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		};
 	});
 
-	function handleEditorScrollSync(position: ScrollSyncPosition) {
-		// The line the tab would record as its reading position, not the line
-		// the viewport cuts in half: `tabAnchorForEditorTopLine` is the one
-		// crossing from a Monaco top line into the outline's numbering (it
-		// counts from the body, and sits `EDITOR_ANCHOR_LINE_OFFSET` lines
-		// down). Handing over the raw top line left the outline one entry
-		// behind whenever a heading was the first line on screen (#744).
-		if (position.line !== undefined) {
-			followToc('editor', tabAnchorForEditorTopLine(lineCoords, asBufferLine(position.line)));
-		}
-
-		if (splitScrollSyncOn()) {
-			scrollPreviewToSyncPosition(position);
-		}
-	}
-
-	/**
-	 * Scroll sync is a split-view feature, and `isScrollSynced` outlives the
-	 * split: it is the tab's remembered choice for the next one. Out of split
-	 * the other pane is still mounted at zero width, so a position mapped
-	 * through it drags the visible pane off the line Ctrl+E put it on (#799).
-	 */
-	function splitScrollSyncOn() {
-		const tab = tabManager.activeTab;
-		return !!tab?.isSplit && tab.isScrollSynced;
-	}
-
-	/**
-	 * The source line to save as this tab's reading position: the one rendered
-	 * `PREVIEW_ANCHOR_OFFSET` below the top of the viewport, which is where the
-	 * restore puts it back.
-	 *
-	 * This used to be its own scan — `querySelectorAll('[data-sourcepos]')` over
-	 * the whole preview, then `offsetTop` and `offsetHeight` on every element it
-	 * returned, on every scroll event. Two things were wrong with that beyond the
-	 * cost (8.3ms per event on a 13,000-line document, measured in Chrome). It
-	 * took the FIRST element covering the offset in document order, which is the
-	 * outermost, while the restore's `findAnchorElement` takes the narrowest — so
-	 * capture and restore disagreed about which block a position belonged to. And
-	 * it had no opinion about `<br>`, which carries a source range and no box, so
-	 * an anchor at the top of the document could resolve to one (#464).
-	 */
 	function getPreviewScrollAnchor(target: HTMLElement): RendererLine | null {
-		const line = getSourceLineAtPreviewOffset(
-			target,
-			target.scrollTop + PREVIEW_ANCHOR_OFFSET,
-			measurePreviewBox,
-		);
-
-		// Straight off `data-sourcepos`, so it is already a renderer line: the
-		// two consumers — the tab's saved reading position and the outline —
-		// both count from the first line of the body.
-		return line === null ? null : asRendererLine(Math.round(line));
-	}
-
-	function syncEditorToPreviewScroll(target: HTMLElement) {
-		if (!splitScrollSyncOn() || !editorPane) return;
-
-		const position = getPreviewScrollSyncPosition(target);
-		editorPane.syncScrollToPosition(position);
+		return previewScrollAnchor(target, measurePreviewBox);
 	}
 
 	let isScrolling = $state(false);
@@ -2005,14 +1384,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 				tabManager.updateTabScrollPercentage(tabManager.activeTabId, percentage);
 			}
 
-			// One descent, two consumers: the tab's reading position, and the
-			// outline. Both want the line at the top of the preview, and this is
-			// already the only place it is measured.
-			const anchorLine = getPreviewScrollAnchor(target);
-			if (anchorLine !== null) {
-				tabManager.updateTabAnchorLine(tabManager.activeTabId, anchorLine);
-				followToc('preview', anchorLine);
-			}
+			followPreviewScroll(target);
 		}
 
 		syncEditorToPreviewScroll(target);
@@ -2080,127 +1452,44 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		return false;
 	}
 
-	async function openRelativeMarkdownTarget(target: RelativeMarkdownTarget) {
-		const from = currentFile;
-		const resolved = resolveMarkdownTargetPath(from, target);
-		if (!resolved) return;
-		// The same file, not the same string: `readme.md#a` inside `Readme.md`
-		// on macOS, or a link through a symlink, is a jump within this document,
-		// not a reload that asks to discard its unsaved edits.
-		const [resolvedKey, fromKey] = await Promise.all([canonicalizePath(resolved), canonicalizePath(from)]);
-		if (isSameFilePath({ path: resolved, pathKey: resolvedKey }, { path: from, pathKey: fromKey })) {
-			if (target.hash) {
-				await scrollToAnchorWhenReady(target.hash);
-			} else if (markdownBody) {
+	function openRelativeMarkdownTarget(target: RelativeMarkdownTarget) {
+		return openRelativeTarget(target, {
+			currentFile,
+			canonicalizePath,
+			scrollToAnchorWhenReady,
+			scrollToTop: () => {
+				if (!markdownBody) return;
 				pushScrollHistory();
 				markdownBody.scrollTo({ top: 0, behavior: jumpBehavior });
-			}
-			return;
-		}
-		if (tabManager.activeTabId && !(await canCloseTab(tabManager.activeTabId))) return;
-		await loadMarkdown(resolved, { navigate: true });
-		if (target.hash) {
-			await scrollToAnchorWhenReady(target.hash, { pushHistory: false }, resolved);
-		}
+			},
+			get activeTabId() { return tabManager.activeTabId; },
+			canCloseTab,
+			loadMarkdown: (path) => loadMarkdown(path, { navigate: true }),
+		});
 	}
 
 	async function openMarkdownTargetInNewTab(target: RelativeMarkdownTarget) {
 		const resolved = resolveMarkdownTargetPath(currentFile, target);
 		if (!resolved) return;
 
-		// The ordinary open path, as the Open dialog takes it: `loadMarkdown`
-		// resolves the file's identity first, so a tab already holding it under
-		// another spelling is activated instead of a second tab being built.
-		await loadMarkdown(resolved, { inNewTab: true });
+		await documentSession.openInNewTab(resolved);
 		if (target.hash) {
 			await scrollToAnchorWhenReady(target.hash, { pushHistory: false }, tabManager.activeTab?.path);
 		}
 	}
 
-	async function handleLinkClick(e: MouseEvent) {
-		const target = e.target as HTMLElement;
-
-		// The hover preview describes the element under the cursor, and only
-		// `mouseout` takes it down. A click that replaces the document removes
-		// that element while the cursor is still on it, and removing a node
-		// dispatches no `mouseout` — so the box was left on screen until the
-		// pointer happened to cross another link. Dropping it here, before any
-		// branch, is the same thing a browser does with its own link preview:
-		// the click is the moment the description stops being about anything.
-		tooltip.show = false;
-
-		// Fold toggle: the heading's chevron, or a foldable callout's whole title
-		// bar. One branch for both, because they are one feature — the callout's
-		// own branch used to toggle the classes and stop there, so a folded
-		// callout re-opened on the next render while a folded heading did not.
-		if (toggleFoldFromClick(foldHost, target)) {
-			if (e.detail > 1) e.preventDefault(); // prevent double-click selection
-			e.stopPropagation();
-			return;
-		}
-
-		const a = target.closest('a');
-		if (a) {
-			const href = a.getAttribute('href');
-			if (href?.startsWith('#') && href.length > 1) {
-				e.preventDefault();
-				await scrollToAnchorWhenReady(href.substring(1));
-				return;
-			}
-
-			const relativeMarkdownTarget = href ? getRelativeMarkdownTarget(href) : null;
-			if (relativeMarkdownTarget) {
-				e.preventDefault();
-				e.stopPropagation();
-				// Which of the two this is depends on the setting and the chord
-				// together — the chord means "the other one". Opening a tab goes
-				// through `addTab`, which already resolves a file that is open to
-				// the tab holding it, so one gesture answers both halves of #661:
-				// a new tab, or the one that already has the file.
-				if (opensInNewTab(settings.osType, e, settings.linksOpenInNewTab)) {
-					await openMarkdownTargetInNewTab(relativeMarkdownTarget);
-				} else {
-					await openRelativeMarkdownTarget(relativeMarkdownTarget);
-				}
-				return;
-			}
-
-			// Every other link is opened by `handleDocumentClick` on `document`,
-			// and SvelteKit's router sits in between (on
-			// `document.documentElement`), claiming any same-origin href whose
-			// click nobody else has: `[a](Files/a.pdf)` became a client-side
-			// navigation to a route that does not exist, and its 404 page
-			// replaced the app — including the title bar it draws, which on
-			// Windows is the only way to close the window (#772). The router
-			// bails on `event.defaultPrevented`.
-			e.preventDefault();
-			return;
-		}
-
-        // media zoom handling
-        const img = target.closest('img');
-        if (img) {
-            zoomData = { src: img.src };
-            return;
-        }
-
-        const mermaidDiv = target.closest('.mermaid-diagram');
-        if (mermaidDiv) {
-            const svg = mermaidDiv.querySelector('svg');
-            if (svg) {
-                // clone and strip fixed dimensions so viewBox governs scaling
-                const clone = svg.cloneNode(true) as SVGElement;
-                clone.removeAttribute('width');
-                clone.removeAttribute('height');
-                clone.style.width = '';
-                clone.style.height = '';
-                zoomData = { html: clone.outerHTML };
-                return;
-            }
-        }
-
-		placePreviewCursor(e);
-    }
+	function handleLinkClick(e: MouseEvent) {
+		return handlePreviewClick(e, {
+			hideTooltip: () => { tooltip.show = false; },
+			toggleFold: (target) => toggleFoldFromClick(foldHost, target),
+			scrollToAnchor: (id) => scrollToAnchorWhenReady(id),
+			opensInNewTab: (event) => opensInNewTab(settings.osType, event, settings.linksOpenInNewTab),
+			openInNewTab: openMarkdownTargetInNewTab,
+			openHere: openRelativeMarkdownTarget,
+			zoom: (data) => { zoomData = data; },
+			placeCursor: placePreviewCursor,
+		});
+	}
 
 	async function handleTaskCheckboxChange(event: Event) {
 		const checkbox = event.target as HTMLInputElement;
@@ -2226,37 +1515,21 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 
 
 
-	/*
-	 * All three mutations go through `updateStoredRecentFiles`, which re-reads
-	 * the stored list first. Writing `JSON.stringify(recentFiles)` from this
-	 * window's copy published a snapshot from whenever this window last looked,
-	 * so with two windows open the later write erased the other's entries.
-	 */
 	function saveRecentFile(path: string) {
-		recentFiles = updateStoredRecentFiles((current) => promoteRecentFile(current, path));
+		recentFileList.save(path);
 	}
 
 	function loadRecentFiles() {
-		recentFiles = readStoredRecentFiles();
+		recentFileList.load();
 	}
 
 	function deleteRecentFile(path: string) {
-		recentFiles = updateStoredRecentFiles((current) => dropRecentFile(current, path));
+		recentFileList.remove(path);
 	}
 
-	/*
-	 * localStorage fires `storage` in every *other* same-origin document, so
-	 * this is how a window learns that a sibling opened or removed a file. Home
-	 * screens in other windows used to keep showing a stale list until restart,
-	 * and — worse — that stale list was what their next write published.
-	 */
 	$effect(() => {
 		if (typeof window === 'undefined') return;
-		const onStorage = (event: StorageEvent) => {
-			if (isRecentFilesStorageEvent(event)) recentFiles = readStoredRecentFiles();
-		};
-		window.addEventListener('storage', onStorage);
-		return () => window.removeEventListener('storage', onStorage);
+		return recentFileList.listen(window);
 	});
 
 	function removeRecentFile(path: string, event: MouseEvent) {
@@ -2270,245 +1543,14 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		return documentSession.canCloseTab(tabId);
 	}
 
-	/**
-	 * The last auto-save a tab gets before it stops being auto-saveable.
-	 *
-	 * Shared by the two ways out of an editable pane (leaving edit mode,
-	 * closing split view). It is NOT a condition of the switch: the view
-	 * changes whether or not the write succeeds, and nothing here asks the
-	 * user anything. The only reason it exists is that the background debounce
-	 * requires `isEditing || isSplit` (see the auto-save effect), so the tab is
-	 * about to lose its scheduled writer while still dirty — a user who asked
-	 * for "save automatically" would otherwise be left with edits that no timer
-	 * is going to flush.
-	 *
-	 * Untitled tabs are excluded on purpose: `saveContent` would open the Save
-	 * dialog for them, which is exactly the forced save decision this stopped
-	 * making.
-	 */
-	async function flushBeforeLeavingEditableMode(tab: Tab) {
-		if (!tab.isDirty || tab.path === '') return;
-		// Auto-save off means edits are kept until the user saves them, so
-		// leaving the pane must not write either — closing keeps or asks.
-		if (!settings.autoSave) return;
-
-		const success = await saveSilently(tab.id);
-		if (!success) {
-			// Refused because the file changed underneath: the edit stays in
-			// the buffer and the conflict bar is already asking about it.
-			if (hasExternalChangeConflict(tab.id)) return;
-			// Reported, not obeyed. A file that cannot be written — read-only
-			// path, a buffer the lossy-decode guard refuses — used to trap the
-			// user in the editor with no way to look at their own text.
-			addToast(t('toast.autoSaveFailed', settings.language), 'error');
-			return;
-		}
-		if (tab.isDirty) {
-			// TOCTOU: the user typed during the await, so the file is one
-			// revision behind and the debounce is about to be dropped. The
-			// preview shows those newest edits, so nothing is lost or wrong on
-			// screen; the disk is what the user should hear about.
-			addToast(t('toast.savedNewerEdits', settings.language), 'info');
-		}
-	}
-
-	/**
-	 * Reading mode's HTML, rendered from the tab's own buffer and its own path.
-	 * Writes through the tab id, so a tab switch during the render cannot land
-	 * one document's HTML on another — and, unlike the `loadMarkdown` call this
-	 * replaces, it neither activates the tab nor re-reads the file.
-	 */
-	async function renderPreviewLeavingEditableMode(tab: Tab) {
-		try {
-			await renderTabPreviewFromRaw(tab);
-		} catch (e) {
-			console.error('Failed to render markdown', e);
-		}
-	}
-
-	/**
-	 * Move the active tab between reading and editing. Just the mode — where
-	 * the reader LANDS is `editSourceRange`'s business, and `toggleEditView`
-	 * is what decides which of the two a ⌘E means.
-	 */
-	async function toggleEdit() {
-		const tab = tabManager.activeTab;
-		if (!tab) return;
-
-		if (isEditing) {
-			// Back to reading. The preview renders the buffer, not the file, so no
-			// save is needed (#168). The tab stays dirty, and closing it or the
-			// window (`settleForExit`) still asks.
-			await flushBeforeLeavingEditableMode(tab);
-			// Ctrl+E lands on the line the other pane was showing, mapped the way
-			// split view maps it (#799).
-			const position = editorPane?.scrollSyncPosition() ?? null;
-			previewPlacing = position !== null;
-			tab.isEditing = false;
-			await renderPreviewLeavingEditableMode(tab);
-			if (position) void restoreAfterLeavingEditor(tab.id, position);
-		} else {
-			// Switch to edit
-			const position = markdownBody ? getPreviewScrollSyncPosition(markdownBody) : null;
-			if (tab.path !== '') {
-				if (tab.isDirty) {
-					// Unsaved edits are already in memory (made in reading
-					// mode, or kept when leaving the editor with auto-save
-					// off). Reading from disk would overwrite them, so only
-					// switch.
-					tab.isEditing = true;
-				} else {
-					const mayApply = claimTabForRead(tab.id);
-					try {
-						// This buffer is about to be handed to the editor, and
-						// the editor arms auto-save. The checked command is what
-						// says whether the decode was lossy, so the tab carries
-						// its own verdict instead of relying on the one
-						// `loadMarkdown` left behind — a file can be converted
-						// to UTF-8 (or away from it) between the two reads.
-						const [content, lossy, encoding] = (await invoke('read_file_content_checked', { path: tab.path })) as [string, boolean, string];
-						// A task ticked, or the tab closed, while this was out.
-						if (!mayApply()) return;
-						tabManager.setTabDecodedLossy(tab.id, lossy);
-						tabManager.setTabEncoding(tab.id, encoding);
-						// Goes through the store so a tab that held only the
-						// large-file preview slice stops being flagged partial.
-						tabManager.setTabRawContent(tab.id, content);
-						tab.isEditing = true;
-					} catch (e) {
-						console.error('Failed to read file for editing', e);
-					}
-				}
-			} else {
-				tab.isEditing = true;
-			}
-			if (position && tab.isEditing) {
-				await tick();
-				editorPane?.syncScrollToPosition(position, { cursorIntoView: settings.tocFollows === 'cursor' });
-			}
-		}
-	}
-
-	/**
-	 * The preview half of #799. The restore effect cannot do it: the article
-	 * stays mounted at zero width in edit mode, so nothing it depends on changes
-	 * with the mode. The pane takes its real width in the same frame (its slide
-	 * is a `transform`, see `utils/paneSlide.ts`), so the line is placed right
-	 * after the render, before the old position is ever painted.
-	 */
-	async function restoreAfterLeavingEditor(tabId: string, position: ScrollSyncPosition) {
-		await tick();
-		previewPlacing = false;
-		const body = markdownBody;
-		if (!body || tabManager.activeTab?.id !== tabId || tabManager.activeTab.isEditing) return;
-		scrollPreviewToSyncPosition(position);
-		// That scroll is marked programmatic, so the tab's anchor and the
-		// outline's current entry are written here.
-		const anchorLine = getPreviewScrollAnchor(body);
-		if (anchorLine !== null) {
-			tabManager.updateTabAnchorLine(tabId, anchorLine);
-			followToc('preview', anchorLine);
-		}
-	}
-
-	/**
-	 * A jump the editor has not been asked for yet, because it does not exist
-	 * yet: `toggleEdit` only flips a flag, and the `Editor` it mounts — and the
-	 * `editorPane` binding that reaches it — arrive on the next render. The
-	 * effect below spends it the moment they do, and immediately when the
-	 * editor is already on screen (split view).
-	 */
-	let pendingEditReveal = $state<BufferLineRange | null>(null);
-
+	// `viewMode.pendingEditReveal`, spent the moment the editor exists.
 	$effect(() => {
-		const range = pendingEditReveal;
+		const range = viewMode.pendingEditReveal;
 		if (!range || !editorPane) return;
 
-		pendingEditReveal = null;
+		viewMode.pendingEditReveal = null;
 		editorPane.revealSourceRange(range.startLine, range.endLine);
 	});
-
-	/**
-	 * Which source lines the reader means by right-clicking here (#90).
-	 *
-	 * The selection when there is one, so a range spanning several blocks opens
-	 * the editor on all of them; a caret or a click with nothing selected falls
-	 * through to whatever is under the pointer, which is how a click on an
-	 * image lands on the image.
-	 *
-	 * `null` when nothing under the pointer came from the document: the front
-	 * matter panel, the outline, the window chrome. The caller then leaves the
-	 * "Edit" entry doing exactly what it did before.
-	 */
-	function getContextMenuSourceRange(e: MouseEvent): LineRange | null {
-		return getSelectionSourceRange() ?? findSourceLineRange(e.target as Node | null);
-	}
-
-	/**
-	 * The source lines the reader has selected in the preview, or null when
-	 * nothing is selected or the selection came from outside the document.
-	 *
-	 * Both ends resolve independently and are merged, so a selection spanning
-	 * several blocks answers with all of them, and one end landing somewhere
-	 * with no range (the front matter panel, the outline) leaves the other end
-	 * in charge. Direction-independent: `startContainer` is the range's start,
-	 * not the point the drag began at.
-	 */
-	function getSelectionSourceRange(): LineRange | null {
-		const selection = window.getSelection();
-		if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
-		return mergeSourceLineRanges(
-			findSourceLineRange(selection.getRangeAt(0).startContainer),
-			findSourceLineRange(selection.getRangeAt(selection.rangeCount - 1).endContainer),
-		);
-	}
-
-	/**
-	 * What ⌘E means, from every entry point that offers it — the hotkey, the
-	 * toolbar, the title bar, and Monaco's own command.
-	 *
-	 * One function so the chord cannot mean two things depending on where the
-	 * caret happens to be (`shortcuts.checks.test.ts` holds the two layers
-	 * together), and so "take me to the editor" behaves the same whether the
-	 * reader asked for it with a key or with a menu item.
-	 */
-	async function toggleEditView() {
-		const selected = getSelectionSourceRange();
-
-		if (!hasPreviewPane) {
-			// The editor is already the whole window: nowhere further to take
-			// the reader, so this is the toggle back out.
-			await toggleEdit();
-			return;
-		}
-
-		if (isSplit && !selected) {
-			// Deliberately nothing.
-			//
-			// What ⌘E is asked for is the ability to edit, and split view
-			// already grants it — the editor is on screen. With no selection
-			// there is no fragment to travel to either, so every remaining
-			// reading of the chord is a LAYOUT change nobody asked for: closing
-			// the preview on a mistyped ⌘E costs the reader the pane and a
-			// second keystroke to get it back, while doing nothing costs
-			// nothing. ⌘\ opens and closes the split, and stays the only way.
-			return;
-		}
-
-		// Reading, or split with a selection: same as the context menu's "Edit".
-		await editSourceRange(selected);
-	}
-
-	/**
-	 * Open the editor on `range`. Toggles into edit mode when `isEditing` is
-	 * false, including split view entered from reading mode.
-	 */
-	async function editSourceRange(range: LineRange | null) {
-		if (!isEditing) await toggleEdit();
-		// `toggleEdit` swallows a failed read and stays in reading mode. Arming
-		// the jump anyway would fire it at whatever document is edited next.
-		if (range && tabManager.activeTab?.isEditing) pendingEditReveal = lineCoords.toBufferRange(range);
-	}
 
 	/**
 	 * This document's two line numberings, and the only thing that converts
@@ -2529,134 +1571,15 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	 */
 	let lineCoords = $derived(lineCoordinates(rawContent));
 
-	async function saveContent(tabId?: string): Promise<boolean> {
-		const id = tabId ?? tabManager.activeTabId ?? '';
-		// Only the saves the user asked for come here — Cmd+S, the menu and
-		// title bar Save. Saves nobody asked for go through `saveSilently`.
-		// So a save that lands here IS the answer "keep my version": it both
-		// authorises the write the session would otherwise refuse, and leaves
-		// the bar with nothing to ask.
-		//
-		// Without the first half the bar became a trap: the disk really has
-		// changed, so the guard in `saveContent` refuses, so the bar goes back
-		// up, and Cmd+S can never get the user out of it.
-		if (hasExternalChangeConflict(id)) documentSession.allowOverwriteOnce(id);
-		return saveSilently(id);
-	}
-
-	/**
-	 * A save nobody asked for: the debounce, leaving an editable pane, the
-	 * exit's auto-save. It never authorises overwriting a changed file, so on
-	 * a conflicted tab the session's guard refuses it and the bar stays up.
-	 */
-	async function saveSilently(tabId: string): Promise<boolean> {
-		const saved = await documentSession.saveContent(tabId);
-		if (saved) clearExternalChangeConflict(tabId);
-		return saved;
-	}
-
 	async function saveContentAs(): Promise<boolean> {
 		return documentSession.saveContentAs();
 	}
 
-	// --- External change conflicts ---
-	// A file changed on disk while the tab holding it had unsaved edits. The
-	// reload is NOT performed: `setTabRawContent` replaces originalContent
-	// too, so an automatic reload would erase the edits and the fact that
-	// there were any. The tab is flagged instead and the user picks.
-	//
-	// The question is about one file at one baseline, so that is what is
-	// recorded. Anything that puts another document in the tab — a link, back
-	// and forward, Reload, Save As, the close dialog's Save or Don't Save —
-	// moves the path or the baseline, and the conflict is void without each of
-	// them having to remember to clear it.
-	let externalChangeConflicts = $state<Record<string, { path: string; baseline: string }>>({});
 	let activeExternalChangeConflict = $derived(
 		tabManager.activeTabId ? hasExternalChangeConflict(tabManager.activeTabId) : false,
 	);
 
-	function hasExternalChangeConflict(tabId: string): boolean {
-		const conflict = externalChangeConflicts[tabId];
-		const tab = tabManager.tabs.find((item) => item.id === tabId);
-		return !!conflict && !!tab && tab.path === conflict.path && tab.originalContent === conflict.baseline;
-	}
-
-	function noteExternalChangeConflict(tabId: string) {
-		const tab = tabManager.tabs.find((item) => item.id === tabId);
-		if (tab) externalChangeConflicts[tabId] = { path: tab.path, baseline: tab.originalContent };
-	}
-
-	function clearExternalChangeConflict(tabId: string) {
-		delete externalChangeConflicts[tabId];
-	}
-
-	/** "Reload": the user chose the disk version over their own edits. */
-	async function resolveExternalChangeByReloading(tabId: string) {
-		// The reload lands in the active tab, so it is refused for any other.
-		const tab = tabManager.activeTab;
-		if (!tab?.path || tab.id !== tabId) return;
-		comparison = null;
-		clearExternalChangeConflict(tab.id);
-		await loadMarkdown(tab.path, {
-			preserveEditState: true,
-			skipTabManagement: true,
-			resetScrollHistory: true,
-			// The user answered "the file changed under your edits" with the
-			// disk version. Every other caller of loadMarkdown is an OPEN and
-			// must leave an edited buffer alone; this one is the revert, and
-			// says so rather than leaving the session to infer it.
-			discardUnsavedBuffer: true,
-		});
-	}
-
-	/**
-	 * The two versions the conflict bar is asking about, once the user has
-	 * asked to see them.
-	 *
-	 * Read on demand rather than kept alongside the flag: the bar can stand for
-	 * a while, and what matters is what the file says when the question is
-	 * actually being answered, not what it said when it was raised.
-	 */
-	let comparison = $state<{ tabId: string; onDisk: string; mine: string; language: string } | null>(null);
-
-	// The overlay answers for the tab it was opened on. Switching tabs, or that
-	// tab's conflict going void, closes it rather than letting its buttons land
-	// on whatever is in front.
-	$effect(() => {
-		if (comparison && (comparison.tabId !== tabManager.activeTabId || !hasExternalChangeConflict(comparison.tabId))) {
-			comparison = null;
-		}
-	});
-
-	/** "Compare": show what Reload would replace, before it is irreversible. */
-	async function compareExternalChange() {
-		const tab = tabManager.activeTab;
-		if (!tab?.path) return;
-		try {
-			const [onDisk] = (await invoke('read_file_content_checked', { path: tab.path })) as [string, boolean, string];
-			if (tabManager.activeTabId !== tab.id) return;
-			comparison = {
-				tabId: tab.id,
-				onDisk,
-				mine: tab.rawContent,
-				language: editorLanguageFor(tab.path),
-			};
-		} catch (error) {
-			console.error('Failed to read the file for comparison', error);
-			addToast(`${t('externalChange.compare', settings.language)}: ${String(error)}`, 'error');
-		}
-	}
-
-	/** "Keep my version": dismiss. The buffer stays dirty and saveable. */
-	function resolveExternalChangeByKeepingBuffer(id: string) {
-		// The answer is about a write, not about a bar: the next save has to be
-		// allowed past the guard that would otherwise refuse to overwrite the
-		// changed file. One save only — a third program writing a minute later
-		// is a new question, and the user has not answered that one.
-		documentSession.allowOverwriteOnce(id);
-		comparison = null;
-		clearExternalChangeConflict(id);
-	}
+	$effect(() => externalChange.closeStaleComparison());
 
 	/**
 	 * Auto-save effect.
@@ -2709,21 +1632,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			const seenIds = new Set<string>();
 			for (const s of snapshot) {
 				seenIds.add(s.id);
-				// A tab with an unanswered external-change conflict is NOT
-				// eligible: the debounce would fire while the bar is still
-				// asking "reload or keep mine", write the buffer, and destroy
-				// the disk version the question was about — leaving the user to
-				// answer a question whose "reload" branch no longer exists.
-				// Only this background timer is held back. Cmd+S and the close
-				// dialog's Save still write, because that answer means "keep
-				// mine".
-				// A tab whose buffer was decoded lossily is dropped once the
-				// guard has refused it and said why. The first attempt is what
-				// produces that explanation, so it is deliberately allowed
-				// through; re-arming after it would only reach the same refusal
-				// every 1.5s for as long as the user keeps typing.
-				const eligible = s.isDirty && s.path !== '' && s.editable && !s.hasPendingConflict
-					&& !(s.decodedLossily && documentSession.isLossySaveRefused(s.id));
+				const eligible = isAutoSaveEligible(s, documentSession.isLossySaveRefused);
 				const prevRef = lastContentRefByTab.get(s.id);
 				const refChanged = prevRef !== s.contentRef;
 
@@ -2759,15 +1668,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 						(ok) => {
 							if (!ok) {
 								console.error('Auto-save failed for tab', s.id);
-								// A refusal already explained itself, naming the
-								// file and the way out. "Auto-save failed" on top
-								// of that says nothing new.
-								if (documentSession.isLossySaveRefused(s.id)) return;
-								// Same reasoning for the other refusal: the disk
-								// moved under the write, and the conflict bar is
-								// already on screen saying so and offering both
-								// ways out.
-								if (hasExternalChangeConflict(s.id)) return;
+								if (!autoSaveFailureNeedsToast(s.id, { isLossySaveRefused: documentSession.isLossySaveRefused, hasExternalChangeConflict })) return;
 								addToast(
 									t('toast.autoSaveFailed', settings.language),
 									'error',
@@ -2800,21 +1701,17 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 
 	async function exportAsHtml() {
 		const tab = tabManager.activeTab;
-		const result = await _exportHtml({
-			rawContent,
-			tabTitle: tab?.title || '',
-			tabPath: tab?.path || '',
-			// The exported page carries the appearance it was made in (see
-			// `exportThemeAttribute`), and Mermaid bakes its theme into the SVG,
-			// so the diagrams have to be rendered for the same appearance.
-			mermaidTheme: currentMermaidTheme(),
-			// The same value the live preview is wearing as `--preview-max-width`,
-			// so the exported file is read at the measure it was written at.
-			contentWidth: previewContentWidth,
-			appearance: previewAppearance,
-			newlineBreaks: settings.previewNewlineBreaks,
-			frontMatterTitle: t('frontMatter.properties', settings.language),
-		});
+		const result = await _exportHtml(
+			exportContextFrom(settings, {
+				rawContent,
+				tabTitle: tab?.title || '',
+				tabPath: tab?.path || '',
+				// The exported page carries the appearance it was made in (see
+				// `exportThemeAttribute`), and Mermaid bakes its theme into the SVG,
+				// so the diagrams have to be rendered for the same appearance.
+				mermaidTheme: currentMermaidTheme(),
+			}),
+		);
 		if (result?.missingImages) {
 			addToast(
 				t('toast.exportedHtmlMissingImages', settings.language).replace(
@@ -2861,14 +1758,12 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			// from the buffer through the same path, so neither the preview's
 			// state nor the window's has anything to do with what prints (#668).
 			path = await _exportPdf({
-				rawContent,
-				tabTitle: tab?.title || '',
-				tabPath: tab?.path || '',
-				mermaidTheme: currentMermaidTheme(),
-					contentWidth: previewContentWidth,
-				appearance: previewAppearance,
-				newlineBreaks: settings.previewNewlineBreaks,
-				frontMatterTitle: t('frontMatter.properties', settings.language),
+				...exportContextFrom(settings, {
+					rawContent,
+					tabTitle: tab?.title || '',
+					tabPath: tab?.path || '',
+					mermaidTheme: currentMermaidTheme(),
+				}),
 				osType: settings.osType,
 				printRoot: printRootEl,
 				onStart: () => {
@@ -2904,25 +1799,14 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		showHome = false;
 	}
 
-	/**
-	 * Hands a file Markpad does not edit to the OS: a document link to
-	 * `data.csv`, or a non-Markdown file clicked in the folder sidebar.
-	 */
-	async function openWithSystem(path: string) {
-		try {
-			// The OS default handler runs a program (`./setup.command`,
-			// `Calculator.app`, `x.exe`) rather than showing it, so one
-			// click on a document's link would launch it. Reveal it instead.
-			if (await invoke<boolean>('is_launchable_path', { path })) {
-				await invoke('open_file_folder', { path });
-				addToast(t('toast.launchableLinkRevealed', settings.language).replace('{{target}}', path), 'info');
-				return;
-			}
-			await openPath(path);
-		} catch (error) {
-			console.error('Failed to open local file', path, error);
-			addToast(t('toast.openFailed', settings.language).replace('{{target}}', path), 'error');
-		}
+	function openWithSystem(path: string) {
+		return openPathWithSystem(path, {
+			isLaunchable: (p) => invoke<boolean>('is_launchable_path', { path: p }),
+			reveal: (p) => invoke('open_file_folder', { path: p }),
+			openPath,
+			revealed: (p) => addToast(t('toast.launchableLinkRevealed', settings.language).replace('{{target}}', p), 'info'),
+			openFailed: (p) => addToast(t('toast.openFailed', settings.language).replace('{{target}}', p), 'error'),
+		});
 	}
 
 	async function selectFolder() {
@@ -2942,37 +1826,11 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	async function selectFile() {
 		const selected = await open({
 			multiple: true,
-			filters: [
-				// The one list every other part of the app already treats as a
-				// Markpad document — including `.txt`, which loads, renders and
-				// saves like any other note (#535). Hardcoding a shorter list here
-				// only hid those files behind "All Files".
-				{ name: 'Markdown', extensions: MARKDOWN_LINK_EXTENSIONS },
-				{ name: 'All Files', extensions: ['*'] },
-			],
+			filters: MARKDOWN_OPEN_FILTERS,
 		});
 		if (!selected) return;
 		const paths = Array.isArray(selected) ? selected : [selected];
 		for (const path of paths) await loadMarkdown(path);
-	}
-
-	async function reloadFromDisk() {
-		const activeId = tabManager.activeTabId;
-		const tab = tabManager.activeTab;
-		if (!activeId || !tab?.path) return;
-		if (!(await canCloseTab(activeId))) return;
-
-		await loadMarkdown(tab.path, {
-			preserveEditState: true,
-			skipTabManagement: true,
-			resetScrollHistory: true,
-			// canCloseTab has already resolved the buffer, so normally there is
-			// nothing left to discard — but the user can type during that await,
-			// and a reload that silently did nothing would be worse than one
-			// that does what its menu item says.
-			discardUnsavedBuffer: true,
-		});
-		addToast(t('toast.reloadedFromDisk', settings.language), 'info');
 	}
 
 	function toggleHome() {
@@ -2986,18 +1844,6 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		}
 
 		await closeTabAndWindowIfLast(tabManager.activeTabId);
-	}
-
-	async function closeTabAndWindowIfLast(tabId: string) {
-		if (!(await canCloseTab(tabId))) return;
-
-		if (tabManager.tabs.length === 1) await savePinnedTagIfNeeded();
-		tabManager.closeTab(tabId);
-		if (tabManager.tabs.length > 0) return;
-
-		invoke('unwatch_file').catch(console.error);
-		// Off, the empty window stays and renders Home.
-		if (settings.closeWindowWithLastTab) await destroyWindowAfterTabsClosed();
 	}
 
 	async function closeTabsWithConfirmation(tabIds: string[]) {
@@ -3018,14 +1864,6 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		if (tabManager.tabs.length === 0) tabManager.setWindowTag(null);
 	}
 
-	async function destroyWindowAfterTabsClosed() {
-		// No tabs left: drop this window's backup so a discarded buffer stays gone.
-		if (recoveryReady) await unsavedRecovery.flush('[]');
-		await persistWindowState(false);
-
-		await appWindow.destroy();
-	}
-
 	async function openFileLocation() {
 		if (currentFile) await invoke('open_file_folder', { path: currentFile });
 	}
@@ -3034,40 +1872,13 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		liveMode = !liveMode;
 	}
 
-	/**
-	 * `img.src` is an asset URL, a remote URL or a `data:` URL.
-	 * `normalizeAssetPath` recognises both asset URL forms (Windows
-	 * `http://asset.localhost/…`, others `asset://localhost/…`) and rejects
-	 * lookalike hosts (#363).
-	 */
 	async function saveImageAs(src: string) {
-		const realPath = normalizeAssetPath(src) ?? '';
-
-		if (!realPath) {
-			// The webview cannot fetch the bytes of a remote image at all: the
-			// app's CSP is `connect-src 'self'`, so a cross-origin `fetch` is
-			// refused before it leaves the page. (`img-src ... https:` is a
-			// different directive; it only governs what an `<img>` may
-			// display.) The download has to happen in Rust, and there is no
-			// command for it yet, so say that rather than reporting a network
-			// failure that never happened.
-			addToast(t('toast.remoteImageNotSupported', settings.language), 'error');
-			return;
-		}
-
-		const ext = realPath.split('.').pop() || 'png';
-		const dest = await save({
-			defaultPath: `image.${ext}`,
-			filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'] }]
+		await saveImageAsFile(src, {
+			save,
+			copyFile: (from, dest) => invoke('copy_file', { src: from, dest }),
+			toast: addToast,
+			language: () => settings.language,
 		});
-		if (dest) {
-			try {
-				await invoke('copy_file', { src: realPath, dest });
-				addToast(t('toast.imageSavedSuccessfully', settings.language));
-			} catch (e) {
-				addToast(`${t('toast.failedToSaveImage', settings.language)}: ${e}`, 'error');
-			}
-		}
 	}
 
 	async function saveDiagramAs(container: HTMLElement) {
@@ -3104,40 +1915,11 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		if (!editorPane) return;
 		e.preventDefault();
 
-		// Chords only for the items people learn the shortcut from. Undo is
-		// listed because Windows has no menu bar to find it in (#997).
-		const modifier = modifierFor(settings.osType);
-		const chord = (c: string) => formatChord(c, modifier);
-
 		docContextMenu = {
 			show: true,
 			x: e.clientX,
 			y: e.clientY,
-			items: [
-				{ label: t('menu.undo', settings.language), shortcut: chord('Mod+Z'), onClick: () => editorPane?.undo() },
-				{
-					label: t('menu.redo', settings.language),
-					shortcut: chord(modifier === 'Cmd' ? 'Mod+Shift+Z' : 'Mod+Y'),
-					onClick: () => editorPane?.redo(),
-				},
-				{ separator: true },
-				{ label: t('menu.cut', settings.language), onClick: () => editorPane?.cutToClipboard() },
-				{ label: t('menu.copy', settings.language), onClick: () => editorPane?.copyToClipboard() },
-				{ label: t('menu.paste', settings.language), onClick: () => editorPane?.pasteFromClipboard() },
-				{ label: t('menu.selectAll', settings.language), onClick: () => editorPane?.selectAll() },
-				{ separator: true },
-				// Monaco's other items need a language provider Markdown lacks.
-				{
-					label: t('menu.commandPalette', settings.language),
-					shortcut: 'F1',
-					onClick: () => editorPane?.runEditorAction('editor.action.quickCommand'),
-				},
-				{
-					label: t('menu.changeAllOccurrences', settings.language),
-					shortcut: chord('Mod+F2'),
-					onClick: () => editorPane?.runEditorAction('editor.action.changeAll'),
-				},
-			],
+			items: editorContextMenuItems(() => editorPane, settings.language, settings.osType),
 		};
 	}
 
@@ -3149,32 +1931,16 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	 * selection, so cancelling there would copy an empty string.
 	 */
 	function handleCopy(e: ClipboardEvent) {
-		const active = document.activeElement;
-		if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
-		const selection = window.getSelection();
-		if (!selection || selection.isCollapsed || !selection.rangeCount || !e.clipboardData) return;
-		// Rendered content keeps its formatting when copied (#674), as in a
-		// browser or VS Code's Markdown preview.
-		const { text, html } = copyableFlavours(selection, currentFile);
-		e.clipboardData.setData('text/plain', text);
-		e.clipboardData.setData('text/html', html);
-		e.preventDefault();
+		handlePreviewCopy(e, currentFile);
 	}
 
 	function handleContextMenu(e: MouseEvent) {
-		if (modalState.show) return;
-		if (mode !== 'app') return;
-		// The editor gets its own menu, and this branch has to come first:
-		// Monaco takes input through a hidden `<textarea>`, so the text-field
-		// carve-out below would otherwise claim every right-click in it.
-		if ((e.target as HTMLElement).closest('.editor-container')) {
+		const menu = contextMenuFor(e.target as HTMLElement, { modalOpen: modalState.show, inApp: mode === 'app' });
+		if (menu === 'editor') {
 			showEditorContextMenu(e);
 			return;
 		}
-		// Text fields keep the webview's own editing menu (Cut/Copy/Paste);
-		// the document menu below is about the rendered preview and has no
-		// edit items, so swallowing the native one leaves no way to paste.
-		if ((e.target as HTMLElement).closest('input, textarea, [contenteditable="true"]')) return;
+		if (menu !== 'document') return;
 		e.preventDefault();
 
 		const selection = window.getSelection();
@@ -3193,30 +1959,17 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		let copyRefItem: any[] = [];
 		if (heading) {
 			const text = headingText(heading);
-			// The rendered id, straight off the element: comrak wrote it, and
-			// the outline reads it the same way — it can be on an anchor comrak
-			// nests inside the heading rather than on the heading itself.
-			const slug = heading.id || heading.querySelector('a.anchor')?.id || '';
+			const slug = headingSlug(heading);
 			copyRefItem = [
 				{ label: t('menu.copyReference', settings.language), onClick: () => copyHeadingReference(text, slug) },
 				{ separator: true },
 			];
 		}
 
-		const img = (e.target as HTMLElement).closest('img');
-		let mediaItems: any[] = [];
-		// Only a local file can be saved: see `saveImageAs`.
-		if (img && normalizeAssetPath(img.src)) {
-			mediaItems = [
-				{ label: t('menu.saveImageAs', settings.language), onClick: () => saveImageAs(img.src) },
-				{ separator: true }
-			];
-		}
+		let mediaItems: any[] = imageMenuItems(e.target as HTMLElement, settings.language, saveImageAs);
 
-		// Resolved now rather than inside the "Edit" handler: by the time that
-		// runs the reader has clicked a menu item, and a click is how a
-		// selection goes away.
-		const editSourceTarget = getContextMenuSourceRange(e);
+		// Resolved now: see `editSourceRangeAt`.
+		const editAtTarget = editSourceRangeAt(e);
 
 		// Read now for the same reason: the click on the item clears the selection.
 		const selected = canAnnotate && settings.previewAnnotations ? selectionAnnotation() : null;
@@ -3280,7 +2033,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 				} },
 				{ separator: true },
 				{ label: t('menu.openFileLocation', settings.language), onClick: openFileLocation, disabled: !currentFile },
-				{ label: t('menu.edit', settings.language), onClick: () => editSourceRange(editSourceTarget) },
+				{ label: t('menu.edit', settings.language), onClick: editAtTarget },
 				{ separator: true },
 				{ label: t('menu.closeFile', settings.language), onClick: closeFile },
 			],
@@ -3296,50 +2049,11 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	function handleMouseOver(event: MouseEvent) {
 		if (mode !== 'app') return;
 		const anchor = linkAt(event.target);
-		if (anchor) {
-			const rawHref = anchor.getAttribute('href') || '';
-
-			// tooltip for same-page anchor links: show text of target header
-			if (rawHref.startsWith('#')) {
-				const el = findAnchorTarget(rawHref.substring(1));
-				if (el) {
-					// Use data-label if it's a block anchor, otherwise use textContent
-					let text = el.getAttribute('data-label') || el.textContent || '';
-					text = text.replace(/↩.*$/, '').trim(); // remove backrefs if any
-					if (text) {
-						const rect = anchor.getBoundingClientRect();
-						tooltip = { show: true, text, shortcut: '', html: '', isFootnote: false, x: rect.left + rect.width / 2, y: rect.top - 8, align: 'top' };
-						return;
-					}
-				}
-				return;
-			}
-
-			// footnote references: show footnote content instead of URL
-			if (anchor.hasAttribute('data-footnote-ref') || anchor.closest('[data-footnote-ref]') || rawHref.match(/#fn-|#fnref-|#user-content-fn/)) {
-				const fnId = rawHref.replace(/^#/, '');
-				const fnLi = previewBlocks?.querySelector(`#${CSS.escape(fnId)}`) ||
-				              previewBlocks?.querySelector(`li#${CSS.escape(fnId)}`);
-				if (fnLi) {
-					// clone to remove backref arrow from tooltip
-					const clone = fnLi.cloneNode(true) as HTMLElement;
-					const backrefs = clone.querySelectorAll('.footnote-backref, a[href^="#fnref-"]');
-					backrefs.forEach(b => b.remove());
-					
-					let fnHtml = clone.innerHTML.trim();
-					if (fnHtml) {
-						const rect = anchor.getBoundingClientRect();
-						tooltip = { show: true, text: '', shortcut: '', html: fnHtml, isFootnote: true, x: rect.left + rect.width / 2, y: rect.top - 8, align: 'top' };
-						return;
-					}
-				}
-			}
-
-			// The raw href. The DOM-resolved one starts with `tauri://localhost`.
-			if (rawHref) {
-				const rect = anchor.getBoundingClientRect();
-				tooltip = { show: true, text: rawHref, shortcut: '', html: '', isFootnote: false, x: rect.left + rect.width / 2, y: rect.top - 8, align: 'top' };
-			}
+		if (!anchor) return;
+		const label = linkTooltipFor(anchor, { findAnchorTarget, footnoteRoot: previewBlocks });
+		if (label) {
+			const rect = anchor.getBoundingClientRect();
+			tooltip = { show: true, ...label, shortcut: '', x: rect.left + rect.width / 2, y: rect.top - 8, align: 'top' };
 		}
 	}
 
@@ -3350,43 +2064,14 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	async function handleDocumentClick(event: MouseEvent) {
 		if (mode !== 'app') return;
 		const anchor = linkAt(event.target);
-		if (anchor) {
-			const rawHref = anchor.getAttribute('href');
-			if (!rawHref) return;
-
-			if (rawHref.startsWith('#')) return;
-
-			const relativeMarkdownTarget = getRelativeMarkdownTarget(rawHref);
-			if (relativeMarkdownTarget) {
-				event.preventDefault();
-				await openRelativeMarkdownTarget(relativeMarkdownTarget);
-				return;
-			}
-
-			// A link to a local non-markdown file (`[data](./data.csv)`) is a
-			// path, and `anchor.href` is not: the DOM resolved it against the
-			// webview origin. Hand the OS the resolved disk path instead.
-			const localFilePath = resolveLocalFileLinkPath(rawHref, currentFile);
-			if (localFilePath) {
-				event.preventDefault();
-				await openWithSystem(localFilePath);
-				return;
-			}
-
-			if (anchor.href) {
-				event.preventDefault();
-				// `openUrl` rejects anything outside the opener plugin's scope
-				// (`mailto:`, `tel:`, `http://*`, `https://*`). Without this the
-				// rejection was unhandled: the click did nothing, said nothing,
-				// and left an uncaught promise rejection behind.
-				try {
-					await openUrl(anchor.href);
-				} catch (error) {
-					console.error('Failed to open link', anchor.href, error);
-					addToast(t('toast.openFailed', settings.language).replace('{{target}}', rawHref), 'error');
-				}
-			}
-		}
+		if (!anchor) return;
+		await followDocumentLink(event, anchor, {
+			currentFile,
+			openHere: openRelativeMarkdownTarget,
+			openWithSystem,
+			openUrl,
+			openFailed: (rawHref) => addToast(t('toast.openFailed', settings.language).replace('{{target}}', rawHref), 'error'),
+		});
 	}
 
 	function handleWheel(e: WheelEvent) {
@@ -3400,7 +2085,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	$effect(() => {
 		const tab = tabManager.activeTab;
 		const renderRevision = ++previewRenderRevision;
-		if (tab && (tab.isSplit || (isEditing && settings.showToc)) && tab.rawContent !== undefined) {
+		if (tab && refreshesPreviewCache(tab, () => isEditing, () => settings.showToc)) {
 			const tabId = tab.id;
 			const rawContent = tab.rawContent;
 			if (tab.previewedRawContent === rawContent) return;
@@ -3437,61 +2122,6 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		if (tabManager.activeTab?.unread) untrack(() => void documentSession.readActiveIfUnread());
 	});
 
-	async function toggleSplitView(tabId: string) {
-		const tab = tabManager.tabs.find((t) => t.id === tabId);
-		if (!tab) return;
-
-		if (!tab.isSplit) {
-			// Split view is an editor, and its first keystroke arms auto-save.
-			// The buffer must be complete first (not empty, not a large file's
-			// partial read), or auto-save writes a truncated file.
-			if (tab.path && !tab.isEditing && !tab.rawContent) {
-				const mayApply = claimTabForRead(tab.id);
-				try {
-					// Checked, like every other read that fills an editable
-					// buffer: split view is an editor, so this tab must carry
-					// the fidelity of its own decode rather than inherit one.
-					const [content, lossy, encoding] = (await invoke('read_file_content_checked', { path: tab.path })) as [string, boolean, string];
-					if (!mayApply()) return;
-					tabManager.setTabDecodedLossy(tab.id, lossy);
-					tabManager.setTabEncoding(tab.id, encoding);
-					tabManager.setTabRawContent(tab.id, content);
-				} catch (e) {
-					console.error('Failed to load raw content for split view', e);
-				}
-			}
-			if (!(await documentSession.ensureFullContent(tab.id))) {
-				addToast(t('toast.partialDocument', settings.language), 'error');
-				return;
-			}
-			tabManager.setSplitEnabled(tab.id, true);
-		} else {
-			// Like leaving edit mode: the surviving pane renders the buffer, so
-			// nothing is saved or asked.
-			await flushBeforeLeavingEditableMode(tab);
-			tabManager.setSplitEnabled(tab.id, false);
-			await renderPreviewLeavingEditableMode(tab);
-		}
-	}
-
-	/** The title bar's three mode buttons (#806): go straight to one, from any. */
-	async function setViewMode(target: ViewMode) {
-		const tab = tabManager.activeTab;
-		if (!tab || viewModeOf(tab) === target) return;
-		if (target === 'split') return toggleSplitView(tab.id);
-		if (!tab.isSplit) return target === 'edit' ? toggleEditView() : toggleEdit();
-		// Leaving split: the editor is already on screen and holds the full
-		// buffer, so Edit only drops the preview. Preview goes through the
-		// normal close, which flushes and renders.
-		if (target === 'edit') {
-			tab.isEditing = true;
-			tabManager.setSplitEnabled(tab.id, false);
-			return;
-		}
-		tab.isEditing = false;
-		await toggleSplitView(tab.id);
-	}
-
 	/*
 	 * `viewerKeymap.ts` decides which command a keystroke means. This maps each
 	 * command to the function that runs it. Every command is preventDefaulted
@@ -3511,79 +2141,32 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		};
 	}
 
+	const viewerCommands = viewerCommandTable({
+		settings,
+		tabManager,
+		reloadFromDisk,
+		carryActiveTabToNextWindow,
+		closeFile,
+		handleNewFile,
+		openNewWindow,
+		selectFile,
+		appExit,
+		toggleSplitView,
+		toggleLiveMode,
+		toggleEditView,
+		saveContentAs,
+		saveActiveTab,
+		handleUndoCloseTab,
+		navigateFileHistory,
+		openSettings: () => (showSettings = true),
+		toggleHome,
+		exportAsPdf,
+		openFileLocation,
+		triggerFindAction,
+	});
+
 	function runViewerCommand(command: ViewerCommand) {
-		switch (command) {
-			case 'preview-width-narrower':
-			case 'preview-width-wider':
-				settings.previewFullWidth = false;
-				settings.previewMaxWidth = adjustPreviewMaxWidth(
-					settings.previewMaxWidth,
-					command === 'preview-width-narrower' ? -40 : 40,
-				);
-				return;
-			case 'reload-from-disk':
-				return void reloadFromDisk();
-			case 'move-tab-to-next-window':
-				return void carryActiveTabToNextWindow();
-			case 'close-file':
-				return void closeFile();
-			case 'new-file':
-				return void handleNewFile();
-			case 'new-window':
-				return void openNewWindow().catch(console.error);
-			case 'open-file':
-				return void selectFile();
-			case 'app-exit':
-				return void appExit();
-			case 'toggle-split-view':
-				if (tabManager.activeTabId) toggleSplitView(tabManager.activeTabId);
-				return;
-			case 'toggle-live-mode':
-				return void toggleLiveMode();
-			case 'toggle-zen-mode':
-				return settings.toggleZenMode();
-			case 'toggle-tabs':
-				settings.showTabs = !settings.showTabs;
-				return;
-			case 'toggle-edit-view':
-				return void toggleEditView();
-			case 'save-as':
-				return void saveContentAs();
-			case 'save': {
-				// Save from any mode. An untitled buffer has content to write. A
-				// clean saved file is a no-op, so its mtime does not wake the watcher.
-				const saveTarget = tabManager.activeTab;
-				if (saveTarget && (saveTarget.isDirty || saveTarget.path === '')) saveContent();
-				return;
-			}
-			case 'undo-close-tab':
-				return void handleUndoCloseTab();
-			case 'next-tab':
-				return tabManager.cycleTab('next');
-			case 'previous-tab':
-				return tabManager.cycleTab('prev');
-			case 'history-back':
-				return void navigateFileHistory('back');
-			case 'history-forward':
-				return void navigateFileHistory('forward');
-			case 'zoom-in':
-				return settings.zoomIn();
-			case 'zoom-out':
-				return settings.zoomOut();
-			case 'zoom-reset':
-				return settings.resetZoom();
-			case 'open-settings':
-				showSettings = true;
-				return;
-			case 'toggle-home':
-				return toggleHome();
-			case 'export-pdf':
-				return void exportAsPdf();
-			case 'reveal-file':
-				return void openFileLocation();
-			case 'find':
-				return triggerFindAction();
-		}
+		viewerCommands[command]();
 	}
 
 	/*
@@ -3647,10 +2230,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
-		const command = viewerCommandFor(e, keyContext());
-		if (!command) return;
-		e.preventDefault();
-		runViewerCommand(command);
+		dispatchViewerKey(e, keyContext(), runViewerCommand);
 	}
 
 	async function navigateFileHistory(direction: 'back' | 'forward') {
@@ -3712,34 +2292,6 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		}
 	}
 
-	// Moving a tab to a new window preserves its state as-is — dirty content,
-	// edit/split mode, history — so there is deliberately no canCloseTab()
-	// save prompt here: movement is not closing. The content travels through
-	// the Rust broker (never disk, never localStorage), and the source tab is
-	// deleted only after the destination confirms the claim, so any failure —
-	// window creation error, timeout — leaves the tab exactly where it was.
-	// A large file may still be holding only its preview slice. The receiving
-	// window cannot tell, so the buffer is completed here, before the payload
-	// is built — otherwise the document arrives short and gets written back
-	// that way.
-	async function handleDetach(tabId: string) {
-		if (!(await documentSession.ensureFullContent(tabId))) {
-			addToast(t('toast.partialDocument', settings.language), 'error');
-			return false;
-		}
-		return windowSession.detach(tabId);
-	}
-
-	async function moveTabToWindow(tabId: string, targetLabel: string, focusAfter = false) {
-		if (!(await documentSession.ensureFullContent(tabId))) {
-			addToast(t('toast.partialDocument', settings.language), 'error');
-			return false;
-		}
-		const moved = await windowSession.transfer(tabId, (token) => invoke('offer_tab_to_window', { targetLabel, token }));
-		if (moved && focusAfter) await invoke('focus_window', { label: targetLabel });
-		return moved;
-	}
-
 	async function carryActiveTabToNextWindow() {
 		const activeId = tabManager.activeTabId;
 		if (!activeId) return;
@@ -3763,23 +2315,6 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		await Promise.all(others.map((window) => emitTo(window.label, 'merge-into', appWindow.label)));
 	}
 
-	async function mergeSelfInto(targetLabel: string) {
-		if (isCloseWalkActive) return;
-		await savePinnedTagIfNeeded();
-		for (const tab of [...tabManager.tabs]) {
-			if (isHomePath(tab.path)) {
-				tabManager.closeTab(tab.id);
-				continue;
-			}
-			await moveTabToWindow(tab.id, targetLabel);
-		}
-		if (tabManager.tabs.length === 0) {
-			if (recoveryReady) await unsavedRecovery.flush('[]');
-			await persistWindowState(false);
-			await appWindow.destroy();
-		}
-	}
-
 	function startDrag(e: MouseEvent, tabId: string | null) {
 		if (!tabId) return;
 		e.preventDefault();
@@ -3791,10 +2326,9 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		const containerWidth = window.innerWidth;
 
 		const onMove = (moveEvent: MouseEvent) => {
-			const deltaX = moveEvent.clientX - startX;
 			tabManager.setSplitRatio(
 				tabId,
-				splitRatioAfterMove(startRatio, deltaX / containerWidth, settings.splitEditorSide),
+				splitRatioAfterDrag(startRatio, startX, moveEvent.clientX, containerWidth, settings.splitEditorSide),
 			);
 		};
 
@@ -3888,7 +2422,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 					if (tag) await openPinnedTag(tag);
 				}
 			}
-			windowMetaReady = true;
+			windowMeta.markReady();
 			if (isDisposed) return;
 
 			const urlParams = new URLSearchParams(window.location.search);
@@ -3907,21 +2441,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			document.addEventListener('visibilitychange', checkpointWhenHidden);
 			unlisteners.push(() => document.removeEventListener('visibilitychange', checkpointWhenHidden));
 			unlisteners.push(
-				await appWindow.listen('file-changed', async (event) => {
-					const changedPath = event.payload as string;
-					// The event names the changed file. Which tab that touches —
-					// and whether it may be reloaded at all — is decided by the
-					// session: it owns the self-write grace window (so our own
-					// auto-save does not bounce back) and it refuses to reload a
-					// tab with unsaved edits.
-					const outcome = await documentSession.resolveExternalChange(changedPath);
-					if (outcome.action === 'ignore') return;
-					if (outcome.action === 'conflict') {
-						noteExternalChangeConflict(outcome.tabId);
-						return;
-					}
-					if (liveMode) loadMarkdown(outcome.path);
-				}),
+				await appWindow.listen('file-changed', (event) => externalChange.handleFileChanged(event.payload as string, liveMode)),
 			);
 
 			const listeners: [string, EventCallback<any>][] = [
@@ -3943,7 +2463,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 						const newPath = oldPath.replace(/[/\\][^/\\]+$/, (m) => m.charAt(0) + newName);
 						try {
 							await documentSession.renameFile(tabId, newPath);
-							recentFiles = updateStoredRecentFiles((current) => renameRecentFile(current, oldPath, newPath));
+							recentFileList.rename(oldPath, newPath);
 						} catch (e) {
 							console.error('Failed to rename file', e);
 							await askCustom(`Failed to rename file: ${e}`, { title: 'Error', kind: 'error' });
@@ -3968,7 +2488,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 					moveTabToWindow(tabId, targetLabel).catch((error) => console.error('Failed to move tab', error));
 				}],
 				['tab-transfer-offer', (event) => {
-					if (isCloseWalkActive) return;
+					if (windowExit.isCloseWalkActive()) return;
 					windowSession.acceptOfferedTransfer(event.payload);
 				}],
 				['merge-into', (event) => {
@@ -3995,42 +2515,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			];
 			for (const [event, handler] of listeners) unlisteners.push(await appWindow.listen(event, handler));
 			unlisteners.push(
-				await appWindow.onCloseRequested(async (event) => {
-					// The red button is a native control, so it is NOT blocked
-					// by the in-app dialog overlay: a second click while the
-					// walk below is showing a dialog would re-enter this handler
-					// and start a competing walk whose setActive calls fight the
-					// first one — the highlighted tab stops matching the dialog.
-					// One walk at a time.
-					if (isCloseWalkActive) {
-						event.preventDefault();
-						return;
-					}
-
-					// Hot exit on quit or when the app exits with this window: the
-					// backup is written, nothing to ask, close proceeds. Closing one
-					// of several windows asks below. Decided before `hadDirtyTabs`:
-					// the buffers stay dirty, and a re-triggered close would only
-					// find them again. If unsure, ask.
-					const keepsUnsaved = () => invoke<boolean>('keeps_unsaved_on_close').catch(() => false);
-					if (settings.persistOpenEditors && (await keepUnsavedForExit(keepsUnsaved))) return;
-
-					// With tabs to review the close is held open while their
-					// dialogs are up, then re-triggered: the handler re-enters,
-					// finds nothing dirty, and the close proceeds.
-					const hadDirtyTabs = tabManager.tabs.some((t) => t.isDirty);
-					if (hadDirtyTabs) event.preventDefault();
-					// Closing one of several windows forgets it; quit or the last window remembers.
-					const endsSession = () => invoke<boolean>('keeps_unsaved_on_close').catch(() => true);
-					if (!(await settleForExit(endsSession))) {
-						// A cancelled close cancels the quit, so the windows left ask again.
-						invoke('set_quitting', { quitting: false }).catch(console.error);
-						return;
-					}
-					// Resolved: drop the backup, so a discarded buffer stays gone.
-					if (recoveryReady) await unsavedRecovery.flush('[]');
-					if (hadDirtyTabs) appWindow.close();
-				}),
+				await appWindow.onCloseRequested(windowExit.handleCloseRequested),
 			);
 
 			unlisteners.push(
@@ -4059,23 +2544,10 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 						const paths = event.payload.paths;
 						const currentEditor = editorPane;
 						if (currentEditor) currentEditor.hideDragCaret();
-						// Both panes route through `routeDroppedFile`. The editor's
-						// branch used to look for an image and silently discard
-						// everything else, so a `.md` dropped there did nothing at
-						// all while the same drop on the preview opened it.
-						const pane = dropPaneFor(dragTarget, !!currentEditor);
-						paths.forEach(path => {
-							switch (routeDroppedFile(path, pane)) {
-								case 'insert':
-									currentEditor?.handleDroppedFile(path, x, y);
-									break;
-								case 'open':
-									loadMarkdown(path);
-									break;
-								case 'unsupported':
-									reportUnsupportedDrop(path);
-									break;
-							}
+						handleDrop(paths, dragTarget, !!currentEditor, {
+							insert: (path) => currentEditor?.handleDroppedFile(path, x, y),
+							open: (path) => loadMarkdown(path),
+							unsupported: reportUnsupportedDrop,
 						});
 						
 						isDragging = false;
@@ -4099,7 +2571,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			try {
 				const args: string[] = await invoke('send_markdown_path');
 				if (!isDisposed && args?.length > 0) {
-					for (const path of args) await loadMarkdown(path);
+					await documentSession.openFiles(args);
 				}
 			} catch (error) {
 				console.error('Error receiving Markdown file path:', error);
@@ -4216,10 +2688,10 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 	<Settings show={showSettings} theme={settings.theme} onSetTheme={(t) => (settings.theme = t)} onclose={() => (showSettings = false)} />
 
 	<DiffOverlay
-		show={comparison !== null}
-		onDisk={comparison?.onDisk ?? ''}
-		mine={comparison?.mine ?? ''}
-		language={comparison?.language ?? 'markdown'}
+		show={externalChange.comparison !== null}
+		onDisk={externalChange.comparison?.onDisk ?? ''}
+		mine={externalChange.comparison?.mine ?? ''}
+		language={externalChange.comparison?.language ?? 'markdown'}
 		labels={{
 			onDisk: t('externalChange.onDisk', settings.language),
 			mine: t('externalChange.mine', settings.language),
@@ -4227,9 +2699,9 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			keepMine: t('externalChange.keepMine', settings.language),
 			close: t('externalChange.close', settings.language),
 		}}
-		onclose={() => (comparison = null)}
-		onreload={() => comparison && resolveExternalChangeByReloading(comparison.tabId)}
-		onkeep={() => comparison && resolveExternalChangeByKeepingBuffer(comparison.tabId)} />
+		onclose={externalChange.closeComparison}
+		onreload={() => externalChange.comparison && resolveExternalChangeByReloading(externalChange.comparison.tabId)}
+		onkeep={() => externalChange.comparison && resolveExternalChangeByKeepingBuffer(externalChange.comparison.tabId)} />
 
 	{#if sidebarSide}
 		<Sidebar
@@ -4267,7 +2739,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			</button>
 		</div>
 	{/if}
-	{#if tabManager.activeTab && !isHomePath(tabManager.activeTab.path) && !showHome}
+	{#if tabManager.activeTab && !showsHomeScreen(() => tabManager.activeTab, showHome)}
 			<div
 				class="markdown-container"
 				style="zoom: {hasPreviewPane ? settings.zoomLevel / 100 : 1}; --code-font: {previewAppearance.codeFontFamily}; --code-font-size: {previewAppearance.codeFontSize}px; --highlight-color: {previewAppearance.highlightColor};"
@@ -4313,14 +2785,14 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 							<Editor
 								bind:this={editorPane}
 								value={tabManager.activeTab.rawContent}
-								readOnly={tabManager.activeTab.isTruncated === true}
+								readOnly={editorReadOnly(tabManager.activeTab)}
 								language={editorLanguage}
 								theme={settings.theme}
 								zoomLevel={settings.zoomLevel}
 								oncommand={runViewerCommand}
 								onscrollsync={handleEditorScrollSync}
 								oncursor={handleEditorCursor}
-								sharedCursor={settings.previewCursor ? activeCursor : null} />
+								sharedCursor={settings.previewCursor ? viewMode.activeCursor : null} />
 						{/if}
 					</div>
 
@@ -4363,7 +2835,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 										if(e.key === 'Enter' || e.key === ' ') handleLinkClick(e as unknown as MouseEvent);
 									}}
 									tabindex="-1"
-									style="outline: none; font-family: {previewAppearance.fontFamily}; font-size: {previewAppearance.fontSize}px; flex: 1; --preview-max-width: {previewContentWidth === null ? '100%' : `${previewContentWidth}px`};">
+									style="outline: none; font-family: {previewAppearance.fontFamily}; font-size: {previewAppearance.fontSize}px; flex: 1; --preview-max-width: {layout.maxWidthCss};">
 									{#if frontMatterInfo.exists}
 										<details
 											class="frontmatter-panel"
@@ -4453,8 +2925,8 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 															{:else}
 																<code>{field.displayValue}</code>
 															{/if}
-															{#if frontMatterEditErrors[frontMatterFieldStateKey(field)]}
-																<div class="frontmatter-field-error" role="status">{frontMatterEditErrors[frontMatterFieldStateKey(field)]}</div>
+															{#if frontMatterFields.editError(field)}
+																<div class="frontmatter-field-error" role="status">{frontMatterFields.editError(field)}</div>
 															{/if}
 														</div>
 													{/each}
@@ -4549,10 +3021,10 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 									onpointerdown={startTocResize}
 									onkeydown={handleTocResizeKeyDown}></div>
 								<Toc
-									activeLine={tocActiveLine} 
+									activeLine={viewMode.tocActiveLine} 
 										{markdownBody} 
 										contentRoot={previewBlocks}
-										{previewRevision}
+										previewRevision={previewPatch.revision}
 										onBeforeJump={pushScrollHistory} 
 										{foldOverrides} 
 										ontoggleFold={(key: string) => toggleFold(foldHost, key)} 
@@ -4564,7 +3036,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 											// sidebar and stays; not overhanging it is sitting in the
 											// margin harming nothing, and closing it would take away a
 											// behaviour that was already fine.
-											if (isOverhanging && !settings.pinnedToc) settings.showToc = false;
+											if (tocAutoCollapses(() => isOverhanging, settings.pinnedToc)) settings.showToc = false;
 											if (hasEditorPane && editorPane) {
 												// Same renderer-to-buffer shift as the context menu: the
 												// outline reads `data-sourcepos` too, and has been landing

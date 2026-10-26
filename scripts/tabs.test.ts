@@ -6,7 +6,7 @@ import { HOME_TAB_PATH } from '../src/lib/utils/homeTab.js';
 import { getTabFileActions, hasRealFilePath } from '../src/lib/utils/tabFileActions.js';
 import { closestSlotIndex, dragDistance } from '../src/lib/utils/tabReorder.js';
 import type { Tab } from '../src/lib/stores/tabs.svelte.js';
-import { asRendererLine, EDITOR_ANCHOR_LINE_OFFSET } from '../src/lib/utils/lineCoordinates.js';
+import { asBufferLine, asRendererLine, EDITOR_ANCHOR_LINE_OFFSET } from '../src/lib/utils/lineCoordinates.js';
 import {
 	buildTransferredTab,
 	snapshotTab,
@@ -14,8 +14,11 @@ import {
 	validateTransferPayload,
 	type TransferableTab,
 } from '../src/lib/utils/tabTransfer.js';
+import { commitWithoutTransitions } from '../src/lib/utils/motion.js';
 import { nextUntitledTitle } from '../src/lib/utils/untitledTitle.js';
 import { outgoingTabAnchorLine, type StoredTabPosition, editorReadingPosition } from '../src/lib/utils/editorPosition.js';
+import { EditorJumps, type JumpEditor } from '../src/lib/utils/editorJumps.js';
+import type { ScrollSyncPosition } from '../src/lib/utils/scrollSync.js';
 
 describe('duplicate tab names', () => {
 	function suffixes(...paths: string[]): (string | undefined)[] {
@@ -502,5 +505,68 @@ describe('editor reading position flush', () => {
 			text: 'body',
 		});
 		assert.equal(anchorLine, null);
+	});
+
+	test('a sync asked for while Monaco is loading is kept, and spent after the restore', () => {
+		// #799: Ctrl+E from the preview asks before the editor exists. Dropping the
+		// request left the editor wherever its old view state put it. The editor
+		// spends it after its view-state restore, and before a queued "edit this
+		// fragment", which has to win over both.
+		const log: unknown[] = [];
+		const model = { getLineCount: () => 3, getLineMaxColumn: () => 5 };
+		const editor = {
+			getModel: () => model,
+			revealLineNearTop: () => {},
+			revealLineInCenterIfOutsideViewport: (line: number) => log.push(['reveal', line]),
+			setSelection: () => {},
+			focus: () => {},
+		} as unknown as JumpEditor;
+		const state = { ready: false };
+		const jumps = new EditorJumps({
+			monaco: () => ({ editor: { ScrollType: { Smooth: 0, Immediate: 1 } } }) as never,
+			editor: () => editor,
+			ready: () => state.ready,
+			scrollTo: (position, options) => log.push(['scroll', position, options]),
+		});
+		const position: ScrollSyncPosition = { section: 'body', ratio: 0.4, line: asBufferLine(12) };
+
+		jumps.syncScrollToPosition(position, { cursorIntoView: true });
+		jumps.revealSourceRange(2, 2);
+		assert.deepEqual(log, []);
+
+		state.ready = true;
+		jumps.spendPending();
+		assert.deepEqual(log, [
+			['scroll', position, { cursorIntoView: true }],
+			['reveal', 2],
+		]);
+
+		jumps.syncScrollToPosition(position);
+		assert.deepEqual(log.at(-1), ['scroll', position, { cursorIntoView: false }], 'once ready, a sync is not queued');
+	});
+});
+
+describe('tab switch is not a render', () => {
+	// A tab switch must not animate: the class that turns transitions off has to
+	// be on the element during a forced style recalculation, or it is added and
+	// removed within one style computation and suppresses nothing.
+	test('a tab switch commits the new pane geometry with transitions off', () => {
+		const log: string[] = [];
+		const classes = new Set<string>();
+		const el = {
+			classList: {
+				add: (name: string) => (classes.add(name), log.push(`add ${name}`)),
+				remove: (name: string) => (classes.delete(name), log.push(`remove ${name}`)),
+			},
+			get offsetHeight() {
+				log.push(`recalc with ${[...classes].join(',') || 'nothing'}`);
+				return 0;
+			},
+		} as unknown as HTMLElement;
+
+		commitWithoutTransitions(el);
+
+		assert.deepEqual(log, ['add tab-switching', 'recalc with tab-switching', 'remove tab-switching']);
+		assert.equal(classes.size, 0, 'the class does not stay on');
 	});
 });

@@ -36,6 +36,14 @@ const { snapshotTab, validateTransferPayload } = await import('../src/lib/utils/
 const { default: HomePage } = await import('../src/lib/components/HomePage.svelte');
 const { promoteRecentFile, updateStoredRecentFiles } = await import('../src/lib/utils/recentFiles.js');
 const { FolderManager, folderName, isInside, snapshotFolder } = await import('../src/lib/stores/folder.svelte.js');
+const { HOME_TAB_PATH, isHomePath, showsHomeScreen } = await import('../src/lib/utils/homeTab.js');
+const { hasRealFilePath } = await import('../src/lib/utils/tabFileActions.js');
+const { openPinnedTagWindow, pinnedTagFromWindowLabel } = await import('../src/lib/utils/pinnedTagWindow.js');
+const { reportWindowMeta } = await import('../src/lib/sessions/windowMeta.svelte.js');
+const { runeEffect } = await import('./runeEffect.svelte.js');
+const { getSupportedLanguages, t } = await import('../src/lib/utils/i18n.js');
+const { viewerCommandFor } = await import('../src/lib/utils/viewerKeymap.js');
+const { viewerCommandTable } = await import('../src/lib/utils/viewerCommands.js');
 
 function useTauri(next: Partial<Bridge> = {}) {
 	beforeAll(() => {
@@ -984,5 +992,292 @@ describe('the folder sidebar store', () => {
 		assert.ok(isInside('C:\\a\\b\\c', 'C:\\a\\b'));
 		assert.ok(!isInside('/a/bc', '/a/b'), 'a sibling with a longer name is not inside');
 		assert.ok(!isInside('/a/b', '/a/b'));
+	});
+});
+
+/*
+ * Issue #392, second half: "the Home tab it opens renders blank". The viewer
+ * draws the home screen only when `showsHomeScreen` says so; the old gate
+ * compared the tab title against 'Recents', a home tab that no longer existed,
+ * so the home tab fell into the document container.
+ */
+describe('the home tab renders the home screen', () => {
+	useTauri();
+
+	/** True when the app draws the document container; false when it draws HomePage. */
+	const showsDocumentContainer = (showHome = false) => !showsHomeScreen(() => tabManager.activeTab, showHome);
+
+	function reset() {
+		tabManager.closeAll();
+		localStorage.clear();
+	}
+
+	// --------------------------------------------------------------- the regression
+
+	test('the home tab renders the home screen, not an empty document', () => {
+		reset();
+		tabManager.addHomeTab();
+
+		assert.equal(tabManager.activeTab?.path, HOME_TAB_PATH, 'precondition: the home tab is active');
+		assert.equal(
+			showsDocumentContainer(),
+			false,
+			'the active home tab fell into the document container: the user sees a blank page',
+		);
+	});
+
+	test('a home tab opened next to files still renders the home screen', () => {
+		// Ctrl+T from a window that already has documents open — the reported path.
+		reset();
+		tabManager.addTab('/notes/a.md');
+		tabManager.addTab('/notes/b.md');
+		tabManager.addHomeTab();
+
+		assert.equal(showsDocumentContainer(), false, 'blank home tab alongside open files');
+	});
+
+	test('the home screen is reached by tab kind, never by the tab title', () => {
+		// The dead half of the old gate. `title` is user-facing text: localised,
+		// and for a file tab it is just a filename, so a document called
+		// `Recents` used to be enough to hide the editor. Nothing about which
+		// branch runs may depend on it.
+		reset();
+		tabManager.addHomeTab();
+		const home = tabManager.activeTab!;
+
+		for (const { code } of getSupportedLanguages()) {
+			home.title = t('tabs.home', code);
+			assert.equal(showsDocumentContainer(), false, `the home screen disappears in locale ${code}`);
+		}
+
+		home.title = 'Recents';
+		assert.equal(showsDocumentContainer(), false, 'the pre-i18n English title must not be what makes this work');
+
+		reset();
+		tabManager.addTab('/notes/Recents');
+		assert.equal(showsDocumentContainer(), true, 'a document named Recents is a document');
+	});
+
+	// ---------------------------------------------------------------- the neighbours
+	//
+	// The three states that already worked. They are the fence: a gate that simply
+	// always chose HomePage would pass the tests above and fail every one of these.
+
+	test('a saved file renders the document container', () => {
+		reset();
+		tabManager.addTab('/notes/a.md');
+
+		assert.equal(showsDocumentContainer(), true);
+	});
+
+	test('an untitled buffer renders the document container', () => {
+		// The distinction the fix rests on: an untitled tab has no file either, so
+		// `hasRealFilePath` is false for both — but it IS a document, and gating on
+		// that predicate would have hidden the editor for every new file.
+		reset();
+		tabManager.addNewTab();
+
+		assert.equal(tabManager.activeTab?.path, '', 'precondition: an untitled tab has no path');
+		assert.equal(hasRealFilePath(''), false, 'precondition: and no real file either');
+		assert.equal(isHomePath(''), false, 'but it is not the home tab');
+		assert.equal(showsDocumentContainer(), true, 'a new file must still get an editor');
+	});
+
+	test('an empty window renders the home screen', () => {
+		reset();
+
+		assert.equal(tabManager.activeTab, undefined);
+		assert.equal(showsDocumentContainer(), false);
+	});
+
+	test('the Home toolbar button still overlays the home screen on any tab', () => {
+		// `showHome` is the other, older route to the same screen: a transient flag
+		// set by the toolbar/menu item, independent of any tab. It must keep
+		// winning over whatever tab is active.
+		reset();
+		tabManager.addTab('/notes/a.md');
+		assert.equal(showsDocumentContainer(true), false, 'a file tab with showHome set');
+
+		tabManager.addNewTab();
+		assert.equal(showsDocumentContainer(true), false, 'an untitled tab with showHome set');
+
+		tabManager.addHomeTab();
+		assert.equal(showsDocumentContainer(true), false, 'the home tab with showHome set');
+	});
+
+	test('switching from the home tab back to a file returns to the document', () => {
+		reset();
+		tabManager.addTab('/notes/a.md');
+		const file = tabManager.activeTab!.id;
+		tabManager.addHomeTab();
+		assert.equal(showsDocumentContainer(), false);
+
+		tabManager.setActive(file);
+
+		assert.equal(showsDocumentContainer(), true, 'the document container must come back');
+	});
+});
+
+describe('a pinned group opens in a window that holds it', () => {
+	const calls: { cmd: string; args: any }[] = [];
+	useTauri({
+		invoke: async (cmd: string, args: any) => {
+			calls.push({ cmd, args });
+			if (cmd === 'get_os_type') return 'macos';
+			return cmd === 'list_viewer_windows' ? [] : null;
+		},
+	});
+
+	test("a window opened for a pinned group is created as the group's holder", async () => {
+		// The window reports its tag only once it has mounted and read the group.
+		// Until then the registry knew nothing of it, so a second click on the same
+		// group opened a second window. `tagName` has the backend record the holder
+		// as it creates the window. (The viewer's own route, `openPinnedTag`, is
+		// asserted in windows.exit.test.ts.)
+		await openPinnedTagWindow('Work');
+		const create = calls.find((call) => call.cmd === 'create_transfer_window');
+		assert.equal(create?.args.tagName, 'Work');
+		assert.equal(pinnedTagFromWindowLabel(`window-${create?.args.token}`), 'Work');
+
+		// And the new window does not report itself, clearing that name, before it
+		// has adopted the group.
+		tabManager.addTab('/notes/a.md');
+		calls.length = 0;
+		const metaCalls = () => calls.filter((call) => call.cmd === 'set_window_meta');
+		let meta!: { markReady: () => void };
+		const dispose = runeEffect(() => void (meta = reportWindowMeta(tabManager, false)));
+		try {
+			flushSync();
+			assert.deepEqual(metaCalls(), [], 'reported before the group was adopted');
+			tabManager.setWindowTag({ name: 'Work', color: '#f00', pinned: true });
+			meta.markReady();
+			flushSync();
+			assert.equal(metaCalls().at(-1)?.args.tagName, 'Work');
+		} finally {
+			dispose();
+		}
+	});
+});
+
+describe('window organization', () => {
+	// jsdom has no Web Animations, and the Home menu flies in. An animation that
+	// never finishes is enough: the assertions read the menu, not the motion.
+	Element.prototype.animate ??= function () {
+		return { cancel() {}, playState: 'finished', effect: null, onfinish: null } as unknown as Animation;
+	};
+	const invoked: { cmd: string; args: any }[] = [];
+	useTauri({
+		invoke: (cmd: string, args: any) => {
+			invoked.push({ cmd, args });
+			if (cmd === 'get_os_type') return Promise.resolve('macos');
+			if (cmd === 'list_pinned_tags') return Promise.resolve([]);
+			if (cmd === 'list_viewer_windows') {
+				return Promise.resolve([
+					{ label: 'main', title: 'Main' },
+					{ label: 'window-2', title: 'Other' },
+				]);
+			}
+			return Promise.resolve(null);
+		},
+	});
+
+	function mounted(Component: any, props: Record<string, unknown>) {
+		const target = document.createElement('div');
+		document.body.append(target);
+		const instance = mount(Component, { target, props, intro: false });
+		flushSync();
+		return {
+			target,
+			[Symbol.dispose]() {
+				unmount(instance);
+				target.remove();
+			},
+		};
+	}
+
+	async function openHomeMenu(onmergeAllWindows: () => void) {
+		const { default: TitleBar } = await import('../src/lib/components/TitleBar.svelte');
+		tabManager.addTab('/notes/a.md', '# A document');
+		const view = mounted(TitleBar, {
+			isFocused: true,
+			isScrolled: false,
+			currentFile: '/notes/a.md',
+			liveMode: false,
+			windowTitle: 'a.md',
+			showHome: false,
+			isEditing: false,
+			ontoggleHome: () => {},
+			ononpenFileLocation: () => {},
+			ontoggleLiveMode: () => {},
+			onsetViewMode: () => {},
+			onmergeAllWindows,
+			theme: 'dark',
+		});
+		view.target.querySelector<HTMLButtonElement>('.icon-home-btn')!.click();
+		flushSync();
+		const items = [...view.target.querySelectorAll<HTMLButtonElement>('.home-menu-item')];
+		return { view, items, labels: items.map((item) => item.textContent?.replace(/\s+/g, ' ').trim() ?? '') };
+	}
+
+	test('window organization exposes move, merge, and carry actions', async () => {
+		// Move: the tab's context menu offers every other window by name, and
+		// choosing one asks this window to move the tab there.
+		const { default: TabView } = await import('../src/lib/components/Tab.svelte');
+		tabManager.closeAll();
+		tabManager.addTab('/notes/a.md', 'text');
+		const tab = tabManager.activeTab!;
+		{
+			using view = mounted(TabView, { tab, isActive: true, onclick: () => {}, onclose: () => {} });
+			view.target.querySelector('.tab')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			flushSync();
+			const moveLabel = t('menu.moveToWindow', 'en');
+			const moves = [...view.target.querySelectorAll<HTMLButtonElement>('.menu-item')].filter((item) => {
+				const label = item.textContent?.trim() ?? '';
+				return label.startsWith(`${moveLabel} `) && label !== t('menu.moveToNewWindow', 'en');
+			});
+			assert.equal(moves.length, 1, 'one entry per other window, none for this one');
+			invoked.length = 0;
+			moves[0].click();
+			const emitted = invoked.find((call) => call.cmd === 'plugin:event|emit_to');
+			assert.equal(emitted?.args.event, 'menu-tab-move');
+			assert.deepEqual(emitted?.args.payload, { tabId: tab.id, targetLabel: 'window-2' });
+		}
+
+		// Merge: the Home menu entry reaches the viewer's handler.
+		let merged = 0;
+		{
+			const { view, items, labels } = await openHomeMenu(() => merged++);
+			using _ = view;
+			items[labels.indexOf(t('menu.mergeAllWindows', 'en'))].click();
+			flushSync();
+			assert.equal(merged, 1);
+		}
+
+		// Carry: the chord names the command, and the command carries the tab.
+		const command = viewerCommandFor(
+			{ key: 'm', code: 'KeyM', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false },
+			{ mode: 'app', osType: 'windows', isSplit: false, overlayOpen: false, dialogOpen: false, isEditing: false, editorHasFocus: false },
+		);
+		assert.equal(command, 'move-tab-to-next-window');
+		const calls: string[] = [];
+		const host = new Proxy({} as any, {
+			get: (_, prop) => (prop === 'settings' || prop === 'tabManager' ? {} : () => void calls.push(String(prop))),
+		});
+		viewerCommandTable(host)[command]();
+		assert.deepEqual(calls, ['carryActiveTabToNextWindow']);
+	});
+
+	test('the Home menu groups window organization below export actions', async () => {
+		const { view, labels } = await openHomeMenu(() => {});
+		using _ = view;
+		const at = (key: string) => {
+			const index = labels.findIndex((label) => label.startsWith(t(key, 'en')));
+			assert.notEqual(index, -1, `${key} is in the menu`);
+			return index;
+		};
+		assert.ok(at('menu.exportPdf') < at('menu.setWindowTag'));
+		assert.ok(at('menu.setWindowTag') < at('menu.mergeAllWindows'));
+		assert.ok(at('menu.mergeAllWindows') < at('menu.exit'));
 	});
 });

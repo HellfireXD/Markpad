@@ -1,45 +1,9 @@
 import assert from 'node:assert/strict';
 
 import { decodeKeybinding, type KeyCodeChord } from 'monaco-editor/esm/vs/base/common/keybindings.js';
-import { KeyCode } from 'monaco-editor/esm/vs/editor/common/standalone/standaloneEnums.js';
-import { KeyMod } from 'monaco-editor/esm/vs/editor/common/services/editorBaseApi.js';
 import { describe, test, beforeAll, expect, vi } from 'vitest';
 
-import { readSource } from './sourceTree.js';
-import { type Chord, editorKeymap, label, PLATFORMS } from './keymapHarness.js';
-
-/*
- * AltGr inside the editor.
- *
- * Windows sends AltGr as Ctrl+Alt with the AltGraph modifier on, so on a
- * Polish layout AltGr+Z (ż) is also Ctrl+Alt+Z, the editor's Zen mode chord.
- * Monaco's standalone keybinding service resolves a keystroke from
- * ctrl/shift/alt/meta and the key code alone (`resolveKeyboardEvent` in
- * standaloneServices.js); it reads `altGraphKey` into its event and never
- * looks at it again. The first test shows that against the installed Monaco;
- * the rest hold Editor.svelte to the guard the second test shows works.
- *
- * What jsdom cannot say is whether WebView2 reports AltGraph for AltGr. The
- * events here set it by hand.
- */
-describe('AltGr guard in Editor.svelte', () => {
-	const EDITOR = readSource('src/lib/components/Editor.svelte');
-
-	test('Editor.svelte tracks AltGr and every Ctrl+Alt action checks it', () => {
-		assert.match(EDITOR, /editor\.createContextKey<boolean>\("altGraphChord", false\)/);
-		assert.match(EDITOR, /editor\.onKeyDown\(\(e\) => altGraphChord\.set\(isAltGraphChord\(e\.browserEvent\)\)\)/);
-
-		const ctrlAltActions = EDITOR.split('editor.addAction({')
-			.slice(1)
-			.map((chunk) => chunk.slice(0, chunk.indexOf('run:')))
-			.filter((head) => /KeyMod\.CtrlCmd \| monaco\.KeyMod\.Alt \|/.test(head));
-		// Zen mode and Insert Table today. Empty would make the loop below vacuous.
-		assert.ok(ctrlAltActions.length >= 2, `found ${ctrlAltActions.length} Ctrl+Alt actions`);
-		for (const head of ctrlAltActions) {
-			assert.match(head, /keybindingContext: "!altGraphChord"/, head.slice(0, 80));
-		}
-	});
-});
+import { bareCommands, type Chord, editorKeymap, label, PLATFORMS } from './keymapHarness.js';
 
 /*
  * WHO OWNS A CHORD: the app, or Monaco?
@@ -171,14 +135,12 @@ describe('Monaco chord ownership', () => {
 	/**
 	 * Every chord the app registers on the editor, and what registers it.
 	 *
-	 * `editorKeymap` covers the `addAction` list. The bare `addCommand` calls live
-	 * in `createEditor`, 500 lines of Monaco setup the action harness cannot run,
-	 * so their keybinding EXPRESSIONS are lifted out of the source and evaluated
-	 * against the real `KeyMod`/`KeyCode` — the numbers are Monaco's, not a
-	 * transcription. Both kinds outrank Monaco's defaults, so leaving the commands
-	 * out would have left a hole exactly where Enter and Tab are bound. A command
-	 * carries no id, so it is named after the function it runs, which is the name a
-	 * reader of the failure wants anyway.
+	 * `editorKeymap` covers the `addAction` list and `bareCommands` the nameless
+	 * `addCommand` keys, both read from `utils/editorActions.ts` with Monaco's real
+	 * `KeyMod`/`KeyCode`. Both kinds outrank Monaco's defaults, so leaving the
+	 * commands out would have left a hole exactly where Enter and Tab are bound. A
+	 * command carries no id, so it is named after the function it runs, which is
+	 * the name a reader of the failure wants anyway.
 	 */
 	function appEditorChords(mac: boolean, os: 1 | 2 | 3): Map<Chord, string[]> {
 		const chords = new Map<Chord, string[]>();
@@ -189,13 +151,7 @@ describe('Monaco chord ownership', () => {
 			for (const chord of list) claim(chord, id);
 		}
 
-		const source = readSource('src/lib/components/Editor.svelte');
-		const commands = [...source.matchAll(/\beditor\.addCommand\(\s*([^,]+),\s*(\w+)\s*[,)]/g)];
-		assert.ok(commands.length >= 2, `found ${commands.length} addCommand calls; the extraction stopped matching`);
-		for (const [, expression, fn] of commands) {
-			const binding = new Function('monaco', `return ${expression}`)({ KeyMod, KeyCode }) as number;
-			claim(chordOf(binding, os), `addCommand(${fn})`);
-		}
+		for (const command of bareCommands()) claim(chordOf(command.binding, os), `addCommand(${command.handler})`);
 
 		return chords;
 	}

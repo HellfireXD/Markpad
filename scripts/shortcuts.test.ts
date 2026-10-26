@@ -8,8 +8,9 @@ import { getSupportedLanguages, type LanguageCode, t, type Translation } from '.
 import { formatChord, modifierFor, SHORTCUT_GROUPS, type ShortcutEntry, shortcutLabel, SHORTCUTS, shortcutSections } from '../src/lib/utils/shortcuts.js';
 import type { ViewMode } from '../src/lib/utils/titlebarToolbar.js';
 import type { ViewerCommand } from '../src/lib/utils/viewerKeymap.js';
+import { tabListMenuItems, tabMenuItems } from '../src/lib/utils/tabContextMenu.js';
 import { translations } from './allTranslations.js';
-import { type Chord, documentKeymap, PLATFORMS } from './keymapHarness.js';
+import { type Chord, documentKeymap, PLATFORMS, viewerCommandCalls } from './keymapHarness.js';
 
 describe('shortcut registry', () => {
 	/*
@@ -920,5 +921,69 @@ describe('open shortcut in preview', () => {
 		for (const chord of ['Ctrl+Shift+O', 'Alt+Ctrl+O']) {
 			assert.equal(documentKeymap('windows').get(chord), undefined, chord);
 		}
+	});
+});
+
+describe('tab context menus', () => {
+	test('the tab context menus print the modifier the user is on, not a hard-coded Ctrl', () => {
+		const emit = () => {};
+		const menus = (osType: string) => ({
+			tab: tabMenuItems({
+				tab: { id: 'tab-1', path: '/notes/a.md' },
+				language: 'en',
+				osType,
+				tabCount: 2,
+				fileActionItems: [],
+				moveToWindowItems: [],
+				emit,
+			}),
+			strip: tabListMenuItems('en', osType, emit),
+		});
+		const shown = (items: { label?: string; shortcut?: string }[]) =>
+			items.filter((item) => item.shortcut).map((item) => [item.label, item.shortcut]);
+
+		for (const [osType, mod] of [['macos', 'Cmd'], ['windows', 'Ctrl'], ['linux', 'Ctrl']] as const) {
+			const { tab, strip } = menus(osType);
+			// Every chord comes from shortcutLabel(), so it agrees with the app menu.
+			assert.deepEqual(shown(tab), [
+				[t('menu.newFile', 'en'), `${mod}+T`],
+				[t('menu.undoCloseTab', 'en'), `${mod}+Shift+T`],
+				[t('menu.closeFile', 'en'), `${mod}+W`],
+			]);
+			assert.deepEqual(shown(strip), [
+				[t('menu.newFile', 'en'), `${mod}+T`],
+				[t('menu.undoCloseTab', 'en'), `${mod}+Shift+T`],
+			]);
+		}
+	});
+});
+
+describe('viewer command table', () => {
+	// `viewerCommandCalls` runs the real table against a recording host; see its
+	// note in `keymapHarness.ts`.
+	const calls = viewerCommandCalls();
+
+	test('Ctrl+Q quits the way the menu’s Exit does, not by closing one window', () => {
+		// The menu prints Ctrl+Q beside Exit, and Exit runs `appExit`, which closes
+		// every window. The chord used to run `getCurrentWindow().close()`, so with
+		// two windows open it closed one and left the app running.
+		assert.deepEqual(calls['app-exit'], ['appExit']);
+	});
+
+	test('every command the dispatcher can name is one the component can run', () => {
+		// The table is a `Record` over the union, so the compiler rejects a missing
+		// entry; this rejects an entry that does nothing.
+		const commands = Object.keys(calls) as ViewerCommand[];
+		assert.ok(commands.length >= 10, `only ${commands.length} commands were reached; the sweep is not running`);
+		for (const command of commands) assert.notDeepEqual(calls[command], [], `${command} does nothing`);
+	});
+
+	test('no path anywhere still opens a Home tab from a keystroke', () => {
+		// The #392 defect in its original spelling: the document branch for Ctrl+T
+		// called `tabManager.addHomeTab`. There is no `ViewerCommand` for that any
+		// more, so the checkable end is the other one: no command the keyboard
+		// reaches touches `addHomeTab`.
+		const routes = Object.entries(calls).filter(([, names]) => names.some((name) => name.endsWith('addHomeTab')));
+		assert.deepEqual(routes.map(([command]) => command), [], 'a keyboard command still reaches addHomeTab');
 	});
 });

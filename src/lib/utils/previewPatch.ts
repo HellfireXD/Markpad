@@ -1,3 +1,5 @@
+import { untrack } from 'svelte';
+
 import { applyFolds, processBlockMarkup, wrapHeadings, type FoldIds } from './markdown.js';
 import { invalidateAnchorMemos } from './previewAnchor.js';
 import { replacedBy } from './richContent.js';
@@ -365,4 +367,43 @@ function insertBlock(host: HTMLElement, els: Element[][], index: number, nodes: 
 		return;
 	}
 	host.prepend(...nodes);
+}
+
+const patchedHtml = new WeakMap<HTMLElement, string>();
+
+/**
+ * `patchPreview` for the viewer's hosts, once per document.
+ *
+ * A host that already holds `html` — a tab being re-activated — is not
+ * sanitized and diffed again: every block would compare equal. The switch did
+ * change which host is displayed, which the anchor memos read, and the patch is
+ * what would have invalidated them.
+ *
+ * Only the new blocks go to `observe`. `ResizeObserver.observe` on a target it
+ * is already watching re-registers it rather than doing nothing, and a fresh
+ * registration delivers an initial observation — so handing it the whole host
+ * would put back the per-keystroke re-measure of every fold that keeping the
+ * observation alive removed.
+ *
+ * The patch runs untracked, `readTab` included: a fold toggle or a rename is
+ * not a new document, so nothing it reads may re-run the caller's effect.
+ */
+export function patchHost(
+	host: HTMLElement,
+	html: string,
+	readTab: () => { filePath: string; foldOverrides: Set<string> },
+	observe: (scope: Element) => void,
+): Pick<PreviewPatch, 'inserted' | 'wrappers'> {
+	const unchanged = patchedHtml.get(host) === html;
+	patchedHtml.set(host, html);
+	if (unchanged) invalidateAnchorMemos();
+	const patch = unchanged
+		? { inserted: [], wrappers: [] }
+		: untrack(() => {
+				const { filePath, foldOverrides } = readTab();
+				return patchPreview(host, html, filePath, foldOverrides);
+			});
+	for (const block of patch.inserted) observe(block);
+	for (const wrapper of patch.wrappers) observe(wrapper);
+	return patch;
 }

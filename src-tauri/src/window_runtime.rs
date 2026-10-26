@@ -9,7 +9,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 pub struct WatcherState {
     pub(crate) watchers: Mutex<HashMap<String, RecommendedWatcher>>,
@@ -118,6 +118,52 @@ impl AppState {
             reopened: AtomicBool::new(false),
             claimed_recovery: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// A viewer window's own report of itself. Its number is given on its first
+    /// report and kept, so the Move-to-window list stays in creation order.
+    fn record_window_meta(
+        &self,
+        label: String,
+        tag_name: Option<String>,
+        tag_color: Option<String>,
+        active_tab_title: String,
+        tab_count: usize,
+    ) {
+        let mut registry = lock_recover(&self.window_registry);
+        let entry = registry.entry(label).or_insert_with(|| WindowMeta {
+            number: self.window_counter.fetch_add(1, Ordering::SeqCst) + 1,
+            tag_name: None,
+            tag_color: None,
+            active_tab_title: String::new(),
+            tab_count: 0,
+        });
+        entry.tag_name = tag_name;
+        entry.tag_color = tag_color;
+        entry.active_tab_title = active_tab_title;
+        entry.tab_count = tab_count;
+    }
+
+    fn viewer_windows(&self) -> Vec<WindowListEntry> {
+        let registry = lock_recover(&self.window_registry);
+        let mut list: Vec<WindowListEntry> = registry
+            .iter()
+            .map(|(label, meta)| WindowListEntry {
+                label: label.clone(),
+                meta: meta.clone(),
+            })
+            .collect();
+        list.sort_by_key(|entry| entry.meta.number);
+        list
+    }
+
+    /// A closed window is no longer a move target, and a quit under way
+    /// remembers that it closed it.
+    fn window_destroyed(&self, label: &str) {
+        lock_recover(&self.window_registry).remove(label);
+        if let Some(closed) = lock_recover(&self.quit).as_mut() {
+            closed.push(label.to_string());
+        };
     }
 }
 
@@ -355,18 +401,7 @@ pub fn set_window_meta(
     if !is_viewer_label(&label) {
         return;
     }
-    let mut registry = lock_recover(&state.window_registry);
-    let entry = registry.entry(label).or_insert_with(|| WindowMeta {
-        number: state.window_counter.fetch_add(1, Ordering::SeqCst) + 1,
-        tag_name: None,
-        tag_color: None,
-        active_tab_title: String::new(),
-        tab_count: 0,
-    });
-    entry.tag_name = tag_name;
-    entry.tag_color = tag_color;
-    entry.active_tab_title = active_tab_title;
-    entry.tab_count = tab_count;
+    state.record_window_meta(label, tag_name, tag_color, active_tab_title, tab_count);
 }
 
 /// Whether a window other than `label` currently carries `name` as its tag.
@@ -410,16 +445,7 @@ pub fn is_window_tag_taken(
 
 #[tauri::command]
 pub fn list_viewer_windows(state: State<'_, AppState>) -> Vec<WindowListEntry> {
-    let registry = lock_recover(&state.window_registry);
-    let mut list: Vec<WindowListEntry> = registry
-        .iter()
-        .map(|(label, meta)| WindowListEntry {
-            label: label.clone(),
-            meta: meta.clone(),
-        })
-        .collect();
-    list.sort_by_key(|entry| entry.meta.number);
-    list
+    state.viewer_windows()
 }
 
 /// Starts a quit (`true`) or ends one a close cancelled (`false`), returning
@@ -513,6 +539,12 @@ pub fn focus_window(app: AppHandle, label: String) -> Result<(), String> {
 /// Consumed by the launch window's first show. See `show_window`.
 static MAIN_WINDOW_SHOWN: AtomicBool = AtomicBool::new(false);
 
+/// Whether this show is the launch window's first, the one that must not
+/// activate. Asking consumes it. See `show_window`.
+fn is_cold_start_show(label: &str, shown: &AtomicBool) -> bool {
+    label == LAUNCH_LABEL && !shown.swap(true, Ordering::Relaxed)
+}
+
 /// Reveals a window that was built hidden.
 ///
 /// The launch window is built hidden so no empty frame is on screen while the
@@ -532,8 +564,7 @@ static MAIN_WINDOW_SHOWN: AtomicBool = AtomicBool::new(false);
 /// of those must still come to the front.
 #[tauri::command]
 pub async fn show_window(window: tauri::Window) {
-    let is_cold_start =
-        window.label() == LAUNCH_LABEL && !MAIN_WINDOW_SHOWN.swap(true, Ordering::Relaxed);
+    let is_cold_start = is_cold_start_show(window.label(), &MAIN_WINDOW_SHOWN);
 
     let _ = window.show();
 
@@ -996,7 +1027,7 @@ fn is_viewer_label(label: &str) -> bool {
     label == LAUNCH_LABEL || label.starts_with("window-")
 }
 
-pub fn bring_to_front(window: &tauri::WebviewWindow) {
+pub fn bring_to_front<R: Runtime>(window: &tauri::WebviewWindow<R>) {
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
@@ -1015,7 +1046,7 @@ fn delivery_label<'a>(
         .or_else(|| open.first().copied())
 }
 
-pub fn pick_delivery_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+pub fn pick_delivery_window<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
     let windows = app.webview_windows();
     let mut open: Vec<&str> = windows
         .keys()
@@ -1033,19 +1064,40 @@ pub fn pick_delivery_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     windows.get(label).cloned()
 }
 
+/// Joins `path` to the launch's files while the launch window has not taken them
+/// yet, keeping every one delivered. False once they have been taken.
+fn queue_startup_file(pending: &mut Option<Vec<String>>, path: &str) -> bool {
+    match pending.as_mut() {
+        Some(paths) => {
+            paths.push(path.to_string());
+            true
+        }
+        None => false,
+    }
+}
+
+/// The launch's files: every path the OS delivered before the launch window
+/// asked, in delivery order, ahead of the argv paths it did not already name.
+fn merge_startup_files(opened: Vec<String>, mut files: Vec<String>) -> Vec<String> {
+    for path in opened.into_iter().rev() {
+        if !files.contains(&path) {
+            files.insert(0, path);
+        }
+    }
+    files
+}
+
 /// A file opened by the OS. Until the launch window has taken the launch's files it
 /// joins them, so it lands there and in no other window; after that it goes
 /// where `pick_delivery_window` says.
-pub fn deliver_opened_path(app: &AppHandle, path: String) {
+pub fn deliver_opened_path<R: Runtime>(app: &AppHandle<R>, path: String) {
     let state = app.state::<AppState>();
     let target = {
         let mut pending = lock_recover(&state.startup_files);
-        match pending.as_mut() {
-            Some(paths) => {
-                paths.push(path.clone());
-                app.get_webview_window(LAUNCH_LABEL)
-            }
-            None => pick_delivery_window(app),
+        if queue_startup_file(&mut pending, &path) {
+            app.get_webview_window(LAUNCH_LABEL)
+        } else {
+            pick_delivery_window(app)
         }
     };
     if let Some(window) = target {
@@ -1107,7 +1159,7 @@ pub fn startup_paths(args: &[String], cwd: &Path) -> Vec<String> {
         .collect()
 }
 
-pub fn handle_single_instance(app: &AppHandle, args: Vec<String>, cwd: String) {
+pub fn handle_single_instance<R: Runtime>(app: &AppHandle<R>, args: Vec<String>, cwd: String) {
     // Explorer launches one process per selected file, so these can arrive
     // before the launch window listens; `deliver_opened_path` queues them and
     // fronts the window each one lands in.
@@ -1344,13 +1396,8 @@ pub fn send_markdown_path(window: tauri::Window, state: State<'_, AppState>) -> 
         return Vec::new();
     };
     let args: Vec<String> = std::env::args().collect();
-    let mut files = startup_paths(&args, &std::env::current_dir().unwrap_or_default());
-    for path in opened.into_iter().rev() {
-        if !files.contains(&path) {
-            files.insert(0, path);
-        }
-    }
-    files
+    let files = startup_paths(&args, &std::env::current_dir().unwrap_or_default());
+    merge_startup_files(opened, files)
 }
 
 /// What the window-state plugin keeps for every window.
@@ -1373,7 +1420,7 @@ pub fn geometry_flags() -> tauri_plugin_window_state::StateFlags {
 pub struct GeometrySaver(Mutex<Box<dyn Fn() + Send>>);
 
 impl GeometrySaver {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new<R: Runtime>(app: AppHandle<R>) -> Self {
         Self(Mutex::new(Box::new(coalesced(
             Duration::from_millis(500),
             move || {
@@ -1386,7 +1433,7 @@ impl GeometrySaver {
     }
 }
 
-pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+pub fn handle_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
     match event {
         tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
             if let Some(saver) = window.try_state::<GeometrySaver>() {
@@ -1405,11 +1452,7 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             window
                 .state::<crate::folder::FolderWatcherState>()
                 .forget_window(window.label());
-            let app_state = window.state::<AppState>();
-            lock_recover(&app_state.window_registry).remove(window.label());
-            if let Some(closed) = lock_recover(&app_state.quit).as_mut() {
-                closed.push(window.label().to_string());
-            };
+            window.state::<AppState>().window_destroyed(window.label());
         }
         _ => {}
     }
@@ -1419,6 +1462,73 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    // macOS open-document events: opening several files from Finder delivers
+    // several paths, and every one has to reach the launch window. The defect
+    // this guards against was consuming only the first.
+    #[test]
+    fn macos_open_document_events_preserve_every_delivered_file_path() {
+        let mut pending = Some(Vec::new());
+        assert!(queue_startup_file(&mut pending, "/n/a.md"));
+        assert!(queue_startup_file(&mut pending, "/n/b.md"));
+        let opened = pending.take().unwrap();
+        assert_eq!(
+            merge_startup_files(opened, vec!["/n/c.md".into()]),
+            vec!["/n/a.md", "/n/b.md", "/n/c.md"]
+        );
+        // argv naming one of them again does not open it twice.
+        assert_eq!(
+            merge_startup_files(vec!["/n/a.md".into()], vec!["/n/a.md".into()]),
+            vec!["/n/a.md"]
+        );
+        // Once taken, a later file is not queued for the launch window again.
+        assert!(!queue_startup_file(&mut pending, "/n/d.md"));
+        assert_eq!(pending, None);
+    }
+
+    // The window-state plugin saves only on a clean exit, so after a crash
+    // every window came back at its default size. A move or a resize reaches
+    // the managed saver while the app runs; other events do not.
+    #[test]
+    #[cfg(not(windows))] // mock runtime; see app.rs setup_tests
+    fn a_move_or_resize_schedules_a_geometry_save() {
+        use tauri::{PhysicalPosition, PhysicalSize, WindowEvent};
+        let app = tauri::test::mock_app();
+        let calls = Arc::new(AtomicU64::new(0));
+        let counted = calls.clone();
+        app.manage(GeometrySaver(Mutex::new(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }))));
+        let webview_window =
+            tauri::WebviewWindowBuilder::new(&app, "window-1", tauri::WebviewUrl::default())
+                .build()
+                .unwrap();
+        let window = webview_window.as_ref().window();
+
+        handle_window_event(&window, &WindowEvent::Focused(false));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        handle_window_event(&window, &WindowEvent::Moved(PhysicalPosition::new(10, 20)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        handle_window_event(&window, &WindowEvent::Resized(PhysicalSize::new(800, 600)));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    // `markpad a.md b.md` with Markpad already running arrives here instead of
+    // at `send_markdown_path`. Taking only the first path opened a.md alone,
+    // and emitting straight to a window lost the files that arrived before
+    // the launch window listened (Explorer launches one process per file).
+    #[test]
+    #[cfg(not(windows))] // mock runtime; see app.rs setup_tests
+    fn a_second_launch_hands_every_argv_path_to_the_running_window() {
+        let app = tauri::test::mock_app();
+        app.manage(AppState::new());
+        let args = ["markpad", "a.md", "b.md"].map(String::from).to_vec();
+        handle_single_instance(app.handle(), args, "/n".into());
+        let pending = lock_recover(&app.state::<AppState>().startup_files).clone();
+        let expected =
+            ["a.md", "b.md"].map(|name| Path::new("/n").join(name).display().to_string());
+        assert_eq!(pending, Some(expected.to_vec()));
+    }
 
     fn idle_watcher() -> RecommendedWatcher {
         RecommendedWatcher::new(|_: notify::Result<notify::Event>| {}, Config::default()).unwrap()
@@ -2414,6 +2524,49 @@ mod tests {
         assert_eq!(left_behind, Vec::<String>::new());
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn listed(state: &AppState) -> Vec<String> {
+        state
+            .viewer_windows()
+            .into_iter()
+            .map(|entry| entry.label)
+            .collect()
+    }
+
+    /// Move-to-window lists open windows in the order they were opened, and
+    /// never one that has closed: a closed window offered as a target takes the
+    /// tab nowhere.
+    #[test]
+    fn the_runtime_registers_live_viewer_windows_in_stable_creation_order() {
+        let state = AppState::new();
+        for label in ["main", "window-b", "window-a"] {
+            state.record_window_meta(label.into(), None, None, "t".into(), 1);
+        }
+        // A later report from the first window keeps its place.
+        state.record_window_meta("main".into(), Some("Work".into()), None, "u".into(), 2);
+        assert_eq!(listed(&state), ["main", "window-b", "window-a"]);
+
+        update_quit(&state.quit, true);
+        state.window_destroyed("window-b");
+        assert_eq!(listed(&state), ["main", "window-a"]);
+        assert_eq!(update_quit(&state.quit, false), ["window-b"]);
+    }
+
+    /// Only the launch window's first show stays in the background (#702); a
+    /// detached tab window or the close walk revealing a window still activates.
+    #[test]
+    fn the_launch_window_is_shown_without_being_activated_on_a_cold_start() {
+        let shown = AtomicBool::new(false);
+        assert!(
+            !is_cold_start_show("window-a", &shown),
+            "another window's show is not the cold start"
+        );
+        assert!(is_cold_start_show(LAUNCH_LABEL, &shown));
+        assert!(
+            !is_cold_start_show(LAUNCH_LABEL, &shown),
+            "only the first show is quiet"
+        );
     }
 }
 
