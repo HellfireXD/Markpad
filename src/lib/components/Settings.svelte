@@ -1623,7 +1623,7 @@
 						</div>
 
 						<div class="setting-item">
-							<label for="files-open-file-target">{t('settings.openFileTarget', settings.language)}</label>
+							<label for="files-open-file-target" title={t('settings.openFileTargetHint', settings.language)}>{t('settings.openFileTarget', settings.language)}</label>
 							<div class="select-wrapper">
 								<select id="files-open-file-target" bind:value={settings.openFileTarget}>
 									<option value="lastWindow">{t('settings.openFileTargetLastWindow', settings.language)}</option>
