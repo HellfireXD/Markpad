@@ -1,6 +1,8 @@
 <script lang="ts">
-	import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-	import { emitTo, type EventCallback } from '@tauri-apps/api/event';
+	import { convertFileSrc } from '@tauri-apps/api/core';
+	import { commands, events, type Appearance } from './bindings.js';
+	import { emitToWindow, type WindowEventName } from './windowEvents.js';
+	import type { EventCallback } from '@tauri-apps/api/event';
 	import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window';
 	import { onMount, tick, untrack } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
@@ -227,7 +229,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	 * back to what the menu has always produced.
 	 */
 	function copyHeadingReference(text: string, slug: string) {
-		invoke('clipboard_write_text', { text: referenceForTab(text, slug, tabManager.activeTab) });
+		commands.clipboardWriteText(referenceForTab(text, slug, tabManager.activeTab));
 	}
 
 	function reportUnsupportedDrop(path: string) {
@@ -406,13 +408,13 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	 * its JSON has been parsed — which happens here — so the resolved answer is
 	 * what gets stored, instead of a name Rust would have to learn to parse.
 	 */
-	function saveStartupAppearance(appearance: 'system' | 'light' | 'dark') {
-		invoke('save_theme', { theme: appearance }).catch(console.error);
+	function saveStartupAppearance(appearance: Appearance) {
+		commands.saveTheme(appearance).catch(console.error);
 	}
 
 	followTheme(() => settings.theme, {
 		saveStartupAppearance,
-		readVscodeTheme: (name) => invoke<string>('read_vscode_theme', { name }),
+		readVscodeTheme: (name) => commands.readVscodeTheme(name),
 		recolourDiagrams: () => { if (markdownBody) renderRichContent(); },
 		onLoadFailed: (e) => {
 			console.error("Failed to load vscode theme", e);
@@ -505,10 +507,6 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	let identifyFlash = $state('');
 	let identifyFlashTimer: ReturnType<typeof setTimeout> | undefined;
 
-	// Old localStorage snapshot keys. The snapshot is written through Rust now;
-	// these are read once for migration and removed after the first Rust write.
-	const WINDOW_STATE_KEY = 'savedTabsDataV2';
-	const LEGACY_STATE_KEY = 'savedTabsData';
 	const RESTORE_IN_PROGRESS_KEY = 'markpad-window-restore-in-progress';
 
 	// Each window persists and restores its own snapshot, keyed by its label.
@@ -524,7 +522,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 		}
 	}
 	const unsavedRecovery = createBoundedWriter({
-		write: (json) => invoke('save_unsaved_recovery', { json }),
+		write: (json) => commands.saveUnsavedRecovery(json),
 		onError: reportRecoveryError,
 		initial: '[]',
 	});
@@ -542,11 +540,11 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	// has taken (see `claim_unsaved_recovery`).
 	async function restoreUnsavedChanges() {
 		try {
-			const records = await invoke<Array<[string, string]>>('claim_unsaved_recovery');
+			const records = await commands.claimUnsavedRecovery();
 			const consumed = restoreRecords(tabManager, records, appWindow.label, reportRecoveryError);
 			// Publish the new owner before removing stale window copies.
-			await invoke('save_unsaved_recovery', { json: recoverySnapshot(tabManager.tabs) });
-			await invoke('clear_unsaved_recovery', { labels: consumed });
+			await commands.saveUnsavedRecovery(recoverySnapshot(tabManager.tabs));
+			await commands.clearUnsavedRecovery(consumed);
 			for (const id of await documentSession.dirtyTabsChangedOnDisk()) noteExternalChangeConflict(id);
 			recoveryReady = true;
 		} catch (error) {
@@ -572,8 +570,6 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	});
 
 	const windowSession = createWindowSession({
-		windowStateKey: WINDOW_STATE_KEY,
-		legacyStateKey: LEGACY_STATE_KEY,
 		restoreInProgressKey: RESTORE_IN_PROGRESS_KEY,
 		serializeState: transferOptions.serializeState,
 		shouldRestoreState: () => settings.restoreStateOnReopen,
@@ -592,6 +588,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 		acceptTransferredTab: transferOptions.acceptTransferredTab,
 		onError: (message, error) => {
 			console.error(message, error);
+			// eslint-disable-next-line markpad/toasts-are-translated -- a pass-through: the sessions pass t() text, and the rest is developer detail beside String(error).
 			addToast(`${message}: ${String(error)}`, 'error');
 		},
 		onWarning: (message, error) => console.warn(message, error),
@@ -640,11 +637,11 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	let pinnedTags = $state<Array<{ name: string; color: string; files: string[] }>>([]);
 
 	async function refreshPinnedTags() {
-		pinnedTags = (await invoke('list_pinned_tags')) as typeof pinnedTags;
+		pinnedTags = (await commands.listPinnedTags()) as typeof pinnedTags;
 	}
 
 	async function unpinTagFromHome(name: string) {
-		await invoke('remove_pinned_tag', { name });
+		await commands.removePinnedTag(name);
 		if (tabManager.windowTag?.name === name) tabManager.setWindowTag({ ...tabManager.windowTag, pinned: false });
 		await refreshPinnedTags();
 	}
@@ -677,6 +674,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 		isScrolling: () => isScrolling,
 		onError: (message, error) => {
 			console.error(message, error);
+			// eslint-disable-next-line markpad/toasts-are-translated -- a pass-through: the sessions pass t() text, and the rest is developer detail beside String(error).
 			addToast(`${message}: ${String(error)}`, 'error');
 		},
 		onDiskChangedUnderSave: (id) => externalChange.noteExternalChangeConflict(id),
@@ -711,7 +709,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 		documentSession,
 		loadMarkdown,
 		canCloseTab,
-		readFile: (path) => invoke('read_file_content_checked', { path }),
+		readFile: (path) => commands.readFileContentChecked(path),
 		editorLanguageFor,
 		addToast,
 		t,
@@ -734,7 +732,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 		settings,
 		documentSession,
 		flushBeforeLeavingEditableMode,
-		readFile: (path) => invoke('read_file_content_checked', { path }),
+		readFile: (path) => commands.readFileContentChecked(path),
 		renderTabPreviewFromRaw,
 		tick,
 		addToast,
@@ -884,7 +882,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	// moved the tab to the new file and cleared its folds by then.
 	async function renderMarkdownPreview(raw: string) {
 		const body = getMarkdownBodyWithoutFrontMatter(raw);
-		return (await invoke('render_markdown', { content: body, splitBlocks: true })) as string;
+		return await commands.renderMarkdown(body, true);
 	}
 
 	async function renderTabPreviewFromRaw(tab: Tab) {
@@ -1067,7 +1065,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 			roots: targets,
 			mermaidTheme: currentMermaidTheme(),
 			onCopyCode: (code, label) => {
-				invoke('clipboard_write_text', { text: code.replace(/\n$/, '') })
+				commands.clipboardWriteText(code.replace(/\n$/, ''))
 					.then(() => flashCopiedLabel(label))
 					.catch((err) => {
 						console.error('Failed to copy code:', err);
@@ -1801,8 +1799,8 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 
 	function openWithSystem(path: string) {
 		return openPathWithSystem(path, {
-			isLaunchable: (p) => invoke<boolean>('is_launchable_path', { path: p }),
-			reveal: (p) => invoke('open_file_folder', { path: p }),
+			isLaunchable: (p) => commands.isLaunchablePath(p),
+			reveal: (p) => commands.openFileFolder(p),
 			openPath,
 			revealed: (p) => addToast(t('toast.launchableLinkRevealed', settings.language).replace('{{target}}', p), 'info'),
 			openFailed: (p) => addToast(t('toast.openFailed', settings.language).replace('{{target}}', p), 'error'),
@@ -1865,7 +1863,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	}
 
 	async function openFileLocation() {
-		if (currentFile) await invoke('open_file_folder', { path: currentFile });
+		if (currentFile) await commands.openFileFolder(currentFile);
 	}
 
 	function toggleLiveMode() {
@@ -1875,7 +1873,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	async function saveImageAs(src: string) {
 		await saveImageAsFile(src, {
 			save,
-			copyFile: (from, dest) => invoke('copy_file', { src: from, dest }),
+			copyFile: (from, dest) => commands.copyFile(from, dest),
 			toast: addToast,
 			language: () => settings.language,
 		});
@@ -1890,7 +1888,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 		});
 		if (dest) {
 			try {
-				await invoke('save_file_content', { path: dest, content: svg, encoding: 'UTF-8' });
+				await commands.saveFileContent(dest, svg, 'UTF-8');
 				addToast(t('toast.diagramSavedAsSVG', settings.language));
 			} catch (e) {
 				addToast(`${t('toast.failedToSaveDiagram', settings.language)}: ${e}`, 'error');
@@ -2018,7 +2016,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 				...mediaItems,
 				...(hasSelection ? [{ label: t('menu.copy', settings.language), onClick: () => {
 					const selection = window.getSelection()?.toString();
-					if (selection) invoke('clipboard_write_text', { text: selection });
+					if (selection) commands.clipboardWriteText(selection);
 				} }] : []),
 				...annotationItems,
 				{ label: t('menu.selectAll', settings.language), onClick: () => {
@@ -2295,7 +2293,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	async function carryActiveTabToNextWindow() {
 		const activeId = tabManager.activeTabId;
 		if (!activeId) return;
-		const windows = (await invoke('list_viewer_windows')) as Array<{ label: string; number: number }>;
+		const windows = (await commands.listViewerWindows()) as Array<{ label: string; number: number }>;
 		const ordered = windows.slice().sort((a, b) => a.number - b.number);
 		const selfIndex = ordered.findIndex((window) => window.label === appWindow.label);
 		if (selfIndex === -1 || ordered.length === 1) {
@@ -2306,13 +2304,13 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 	}
 
 	async function mergeAllWindowsHere() {
-		const windows = (await invoke('list_viewer_windows')) as Array<{ label: string }>;
+		const windows = (await commands.listViewerWindows()) as Array<{ label: string }>;
 		const others = windows.filter((window) => window.label !== appWindow.label);
 		if (others.length === 0) {
 			addToast(t('toast.noOtherWindows', settings.language), 'info');
 			return;
 		}
-		await Promise.all(others.map((window) => emitTo(window.label, 'merge-into', appWindow.label)));
+		await Promise.all(others.map((window) => emitToWindow(window.label, 'merge-into', appWindow.label)));
 	}
 
 	function startDrag(e: MouseEvent, tabId: string | null) {
@@ -2386,7 +2384,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 
 		let unlisteners: (() => void)[] = [];
 
-			invoke('show_window').catch(console.error);
+			commands.showWindow().catch(console.error);
 
 			const init = async () => {
 				const appWindow = getCurrentWindow();
@@ -2407,7 +2405,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 			// After this window's own restore, which discards every snapshot when
 			// restore is off. Only the first window of a launch reopens anything.
 			if (settings.restoreStateOnReopen) {
-				await invoke('reopen_remembered_windows').catch((error) => console.error('Failed to reopen windows', error));
+				await commands.reopenRememberedWindows().catch((error) => console.error('Failed to reopen windows', error));
 			}
 			if (settings.persistOpenEditors) await restoreUnsavedChanges();
 			if (isDisposed) return;
@@ -2417,7 +2415,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 				const pinnedName = pinnedTagFromWindowLabel(appWindow.label);
 				if (pinnedName === null) await windowSession.claimTransferredTab();
 				else {
-					const tags = (await invoke('list_pinned_tags')) as typeof pinnedTags;
+					const tags = (await commands.listPinnedTags()) as typeof pinnedTags;
 					const tag = tags.find((pinned) => pinned.name === pinnedName);
 					if (tag) await openPinnedTag(tag);
 				}
@@ -2441,14 +2439,21 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 			document.addEventListener('visibilitychange', checkpointWhenHidden);
 			unlisteners.push(() => document.removeEventListener('visibilitychange', checkpointWhenHidden));
 			unlisteners.push(
-				await appWindow.listen('file-changed', (event) => externalChange.handleFileChanged(event.payload as string, liveMode)),
+				await events.fileChanged(appWindow).listen((event) => externalChange.handleFileChanged(event.payload, liveMode)),
+			);
+			unlisteners.push(
+				await events.filePath(appWindow).listen((event) => {
+					if (event.payload) loadMarkdown(event.payload);
+				}),
+			);
+			unlisteners.push(
+				await events.tabTransferOffer(appWindow).listen((event) => {
+					if (windowExit.isCloseWalkActive()) return;
+					windowSession.acceptOfferedTransfer(event.payload);
+				}),
 			);
 
-			const listeners: [string, EventCallback<any>][] = [
-				['file-path', (event) => {
-					const filePath = event.payload as string;
-					if (filePath) loadMarkdown(filePath);
-				}],
+			const listeners: [WindowEventName, EventCallback<any>][] = [
 				['menu-tab-rename', async (event) => {
 					const tabId = event.payload as string;
 					const tab = tabManager.tabs.find((t) => t.id === tabId);
@@ -2486,10 +2491,6 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 				['menu-tab-move', (event) => {
 					const { tabId, targetLabel } = event.payload as { tabId: string; targetLabel: string };
 					moveTabToWindow(tabId, targetLabel).catch((error) => console.error('Failed to move tab', error));
-				}],
-				['tab-transfer-offer', (event) => {
-					if (windowExit.isCloseWalkActive()) return;
-					windowSession.acceptOfferedTransfer(event.payload);
 				}],
 				['merge-into', (event) => {
 					mergeSelfInto(event.payload).catch((error) => console.error('Failed to merge window', error));
@@ -2569,7 +2570,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 			// Every window asks; Rust hands the launch's files out once, to the
 			// launch window, so a detached window never re-opens them.
 			try {
-				const args: string[] = await invoke('send_markdown_path');
+				const args: string[] = await commands.sendMarkdownPath();
 				if (!isDisposed && args?.length > 0) {
 					await documentSession.openFiles(args);
 				}

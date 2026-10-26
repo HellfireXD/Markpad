@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { commands } from '../bindings.js';
 import {
 	DEFAULT_EDITOR_TOOLBAR_ORDER,
 	applyEditorToolbarMove,
@@ -32,7 +32,7 @@ import {
 	getStoredPreviewFullWidth,
 	normalizePreviewMaxWidth,
 } from '../utils/previewWidth.js';
-import { getSupportedLanguages, type LanguageCode } from '../utils/i18n.js';
+import { getSupportedLanguages, type LanguageCode, type TranslationKey } from '../utils/i18n.js';
 
 export type OSType = 'macos' | 'windows' | 'linux' | 'unknown';
 
@@ -207,7 +207,7 @@ export function isTabPosition(value: unknown): value is TabPosition {
 }
 
 /** The Settings select for the tab position, in order. */
-export const TAB_POSITION_OPTIONS: readonly { value: TabPosition; labelKey: string }[] = [
+export const TAB_POSITION_OPTIONS: readonly { value: TabPosition; labelKey: TranslationKey }[] = [
 	{ value: 'top', labelKey: 'settings.tabPositionTop' },
 	{ value: 'left', labelKey: 'settings.tabPositionLeft' },
 	{ value: 'right', labelKey: 'settings.tabPositionRight' },
@@ -869,7 +869,7 @@ export class SettingsStore {
 
 	async initOSType() {
 		try {
-			const osType = await invoke<unknown>('get_os_type');
+			const osType = await commands.getOsType();
 			this.osType = isOSType(osType) ? osType : 'unknown';
 		} catch (e) {
 			console.error('Failed to get OS type:', e);

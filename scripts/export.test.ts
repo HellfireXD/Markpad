@@ -15,7 +15,21 @@ import { resetRichContentCache } from '../src/lib/utils/richContentCache.ts';
 import { ALLOWED_MARKDOWN_URI_REGEXP } from '../src/lib/utils/sanitize.js';
 import { MERMAID_PRINT_THEME, readDiagramSource, rememberDiagramSource, resolveMermaidTheme } from '../src/lib/utils/mermaidPrint.js';
 import { useShimDom } from './preview.domShim.ts';
+import { readSource } from './sourceTree.js';
 import DOMPurify from 'dompurify';
+import postcss, { type Rule } from 'postcss';
+
+/** The app stylesheet, parsed once: the CSS cases below assert on its rules. */
+const appStylesheet = postcss.parse(readSource('src/styles.css'));
+
+/** Every selector in the sheet, one per comma-separated entry, with the rule it belongs to. */
+function appSelectors(): { selector: string; rule: Rule }[] {
+	const found: { selector: string; rule: Rule }[] = [];
+	appStylesheet.walkRules((rule) => {
+		for (const selector of rule.selectors) found.push({ selector, rule });
+	});
+	return found;
+}
 
 /**
  * #467: "Is there a way how to change the width of exported HTML?" — there was
@@ -34,8 +48,8 @@ import DOMPurify from 'dompurify';
  */
 describe('exported content width', () => {
 	// The shim stands in for the DOM `exportAsHtml` builds into. Without a real DOM
-	// DOMPurify is a no-op object; what it does and where it sits in the pipeline is
-	// `export.checks.test.ts`'s subject, not this one's.
+	// DOMPurify is a no-op object; what it does is preview.spec.ts's subject, not
+	// this one's.
 	useShimDom({ window: globalThis, location: { href: 'http://tauri.localhost/' } }, { identitySanitize: true });
 
 	type Rule = { selectors: string[]; declarations: string; media: 'screen' | 'print' };
@@ -647,8 +661,8 @@ describe('export carries the preview appearance', () => {
  *     — which elements get handed to which library, and where the results end
  *     up — and not the libraries' own output.
  *   - `DOMPurify.sanitize`, which is a no-op object without a real DOM. It is
- *     replaced by the identity function. What the filter does and where it sits
- *     in the pipeline is pinned by `export.checks.test.ts`; the relevant fact
+ *     replaced by the identity function. What the filter does runs in
+ *     `preview.spec.ts`; the relevant fact
  *     here is only that the diagram filter and the document filter are separate
  *     calls, which the diagram test below covers from the other side.
  */
@@ -1060,6 +1074,39 @@ describe('rich content in the HTML export', () => {
 		root.innerHTML = '<p>plain text</p>';
 		assert.equal(collectUsedKatexFamilies(root, KATEX_CSS).size, 0);
 	});
+
+	test('the installed KaTeX still gives the exporter fonts it can find', async () => {
+		// `KATEX_CSS` above is a slice of katex.min.css frozen at the version it was
+		// written against, so it proves the logic and not the coupling. A KaTeX
+		// upgrade that renamed `.katex` or the `KaTeX_` family prefix would leave it
+		// green while PDF export shipped a document with no maths fonts in it — and
+		// 0.18.0 renamed KaTeX's internal classes, so that upgrade is not
+		// hypothetical.
+		//
+		// This asks the installed KaTeX to render, and the installed stylesheet what
+		// that rendering needs. Nothing here is written down: rename anything and the
+		// intersection empties.
+		const katex = ((await import('katex')) as any).default;
+		const css = readSource('node_modules/katex/dist/katex.min.css');
+
+		const root = (globalThis as any).document.createElement('div');
+		root.innerHTML = katex.renderToString('\\mathcal{L} = \\frac{1}{2}', { throwOnError: false });
+
+		const families = collectUsedKatexFamilies(root, css);
+		assert.ok(
+			families.size > 0,
+			'the installed KaTeX renders markup the installed stylesheet gives no font to; ' +
+				'PDF export would embed nothing and the maths would fall back to a UI font',
+		);
+		assert.ok(
+			families.has('KaTeX_Main'),
+			`expected the base family among ${[...families].join(', ') || '(none)'}`,
+		);
+		assert.ok(
+			katexFontUrlsToEmbed(css, families).length > 0,
+			'families were found but no @font-face src to embed for them',
+		);
+	});
 });
 
 describe('export sanitizing', () => {
@@ -1234,6 +1281,45 @@ describe('exported theme', () => {
 		assert.deepEqual(policy.get('style-src'), ["'unsafe-inline'"]);
 		assert.deepEqual(policy.get('img-src'), ['data:', 'https:', 'http:']);
 		assert.deepEqual(policy.get('media-src'), ['data:', 'https:', 'http:']);
+	});
+
+	test('every theme selector the stylesheet defines can be reproduced by an export', () => {
+		// Pins the two halves together: a new `:root[data-theme="…"]` block in
+		// styles.css must be a value the export is willing to write out, or that
+		// theme silently becomes unexportable.
+		const declared = new Set<string>();
+		appStylesheet.walkRules((rule) => {
+			for (const selector of rule.selectors) {
+				for (const match of selector.matchAll(/:root\[data-theme="([^"]+)"\]/g)) declared.add(match[1]);
+			}
+		});
+		assert.ok(declared.size >= 2, 'expected styles.css to select themes by data-theme');
+
+		for (const theme of declared) {
+			assert.equal(exportThemeAttribute(theme), ` data-theme="${theme}"`, `${theme} must survive an export`);
+			assert.ok(matchesThemeSelector(build(theme), theme));
+		}
+	});
+
+	test('the system theme is exported as "follow the reader", not as a frozen colour', () => {
+		// `system` is the one theme that is not a colour: MarkdownViewer deletes
+		// `data-theme` for it and lets `@media (prefers-color-scheme: dark)` decide.
+		// An export with no attribute reproduces that same cascade wherever it is
+		// opened, which is the instruction the user actually gave. Baking in the
+		// exporter's momentary system colour would make the file disagree with the
+		// author's own screen the next time their machine switches.
+		for (const absent of [undefined, null, '']) {
+			const doc = build(absent);
+			assert.doesNotMatch(htmlTag(doc), /data-theme/, `system theme must not pin a colour (${String(absent)})`);
+			assert.match(htmlTag(doc), /^<html lang="en">$/);
+		}
+
+		// And the mechanism it delegates to has to still be in the sheet that gets copied.
+		let followsSystem = false;
+		appStylesheet.walkAtRules('media', (atRule) => {
+			if (atRule.params === '(prefers-color-scheme: dark)' && atRule.some((node) => node.type === 'rule')) followsSystem = true;
+		});
+		assert.ok(followsSystem, 'styles.css must keep a non-empty @media (prefers-color-scheme: dark) block');
 	});
 
 	test('the copied stylesheet and the article still land in the document', () => {
@@ -1531,6 +1617,117 @@ describe('export context', () => {
 			assert.equal(exported, preview.contentWidth, `${previewMaxWidth}/${previewFullWidth}`);
 			// And that is the value the live preview wears as `--preview-max-width`.
 			assert.equal(preview.maxWidthCss, exported === null ? '100%' : `${exported}px`);
+		}
+	});
+});
+
+describe('native PDF printing', () => {
+	test('all Markpad webviews may invoke Tauri native printing', () => {
+		const capability = JSON.parse(readSource('src-tauri/capabilities/default.json')) as {
+			windows: string[];
+			permissions: unknown[];
+		};
+		assert.deepEqual(capability.windows, ['main', 'window-*']);
+		assert.ok(
+			capability.permissions.includes('core:webview:allow-print'),
+			'macOS replaces window.print() with Tauri native printing, which requires this permission',
+		);
+	});
+});
+
+describe('task list stylesheet rules', () => {
+	test('a ticked task dims its content once, not once per nesting level', () => {
+		// `opacity` composites rather than inherits, so a rule matching every
+		// descendant multiplies itself down the tree. Words survive that at one or two
+		// levels deep and KaTeX does not: it nests twelve spans, so a formula in a
+		// ticked item rendered at 0.65^12 = 0.006 and disappeared while the text beside
+		// it merely faded. samples/katex-stress.md keeps a ticked and an unticked task
+		// item next to each other so the difference is visible rather than arguable.
+		//
+		// Scanned across the whole stylesheet rather than inside one rule: the first
+		// attempt at this fixed `:has(:checked)` and left `.task-done`, the class the
+		// app actually sets.
+		const universal = appSelectors()
+			.map(({ selector }) => selector)
+			.filter((selector) => /(task-done|data-task-checkbox\]:checked\))\s*\*$/.test(selector));
+		assert.deepEqual(universal, [], 'a completed task applies opacity to every descendant; deep markup compounds it away');
+
+		// And both paths still dim something: deleting the rules would pass the
+		// assertion above for the wrong reason.
+		for (const marker of ['li.task-done > .task-text', ':checked) > .task-text']) {
+			const dimming = appSelectors().filter(({ selector, rule }) =>
+				selector.endsWith(marker)
+				&& rule.some((node) => node.type === 'decl' && node.prop === 'opacity' && Number(node.value) < 1));
+			assert.ok(dimming.length > 0, `no rule ending in "${marker}" dims anything`);
+		}
+	});
+
+	test('a ticked task strikes only its own text, not its parents or sub-tasks', () => {
+		// #911. `:has(input:checked)` matched every ancestor of a ticked sub-task, and
+		// `text-decoration` on the `li` propagated into nested lists, where no
+		// descendant rule can take it back off.
+		for (const { selector } of appSelectors()) {
+			assert.doesNotMatch(selector, /:has\(input\[data-task-checkbox\]:checked\)/, 'a checkbox anywhere below the item matches it');
+			assert.doesNotMatch(selector, /(task-done|:checked\))$/, 'a strike on the li reaches every nested list');
+			assert.doesNotMatch(selector, /(task-done|:checked\))\s+\.task-text/, 'a descendant .task-text reaches every nested task');
+		}
+	});
+
+	test('a plain item in a list that also holds tasks keeps its bullet', () => {
+		// comrak puts `contains-task-list` on the whole `<ul>` once any item is a
+		// task, and `list-style` inherits, so a rule on the list stripped the bullet
+		// from plain items beside a task.
+		assert.deepEqual(appSelectors().filter(({ selector }) => selector.includes('contains-task-list')), []);
+	});
+
+	test('the marker rules are pseudo-elements, which is what makes them apply', () => {
+		// `summary:marker` sat in the stylesheet as a single colon. `:marker` is not
+		// a pseudo-class, so the rule matched nothing and the disclosure triangle was
+		// never hidden. esbuild passes it through; lightningcss (vite 8) rejects it.
+		//
+		// Only the pseudo-elements with no legacy spelling. `:before`, `:after`,
+		// `:first-line` and `:first-letter` are CSS2 and every browser still accepts
+		// one colon; this file inherits several from github-markdown-css. The CSS3
+		// ones written with one colon parse as an unknown pseudo-class and the whole
+		// rule is discarded.
+		const singleColon = appSelectors()
+			.map(({ selector }) => selector)
+			.filter((selector) => /(^|[^:]):(marker|placeholder|selection|backdrop|file-selector-button)\b/.test(selector));
+		assert.deepEqual(singleColon, [], 'a CSS3 pseudo-element is written with one colon here, so the rule matches nothing');
+	});
+
+	test('the print sheet names no part of the interface', () => {
+		// The PDF prints `#print-root` and hides the rest of the app by structure.
+		// The regression this guards: one selector per app part, growing by one
+		// every time a part is added, and silently wrong until someone finds their
+		// find-bar highlights in a PDF.
+		const printSelectors: string[] = [];
+		appStylesheet.walkAtRules('media', (atRule) => {
+			if (atRule.params !== 'print') return;
+			atRule.walkRules((rule) => {
+				printSelectors.push(...rule.selectors);
+			});
+		});
+		assert.ok(printSelectors.length > 0, 'styles.css must keep an @media print block');
+		for (const part of [
+			'.custom-title-bar',
+			'.tab-area',
+			'.window-controls-left',
+			'.title-actions-container',
+			'.pane.editor-pane',
+			'.pane.viewer-pane',
+			'.split-bar',
+			'.find-bar',
+			'.toc-overlay-wrapper',
+			'.markpad-find-match',
+			'.home-menu-container',
+			'.theme-dropdown-container',
+		]) {
+			assert.deepEqual(
+				printSelectors.filter((selector) => selector.includes(part)),
+				[],
+				`${part} is app state: the printed article cannot contain it, so the print sheet must not mention it`,
+			);
 		}
 	});
 });

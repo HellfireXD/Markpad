@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
+import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import { readSource } from './sourceTree.js';
+import { stubTauriInvoke } from './tauriInvoke.js';
 
 /*
  * `"+` and `"*` against the real monaco-vim package (#775). Every yank, delete
@@ -122,12 +127,16 @@ describe('vim clipboard registers', () => {
 		assert.equal(installVimClipboardRegisters({ Vim: { defineRegister() {}, getRegisterController: () => undefined } }, () => {}), false);
 	});
 
-	test('Editor.svelte installs the commands on the module it just imported', async () => {
+	test('Editor.svelte installs the commands on the module it just imported', async (t) => {
 		// `attachVimMode` is what the editor's `import("monaco-vim").then` runs. It
 		// has to install before `initVimMode` attaches the adapter, and it has to
 		// install even on the disposed path, because the tables it writes to are
 		// the package's and outlive this editor.
 		const { attachVimMode } = await import('../src/lib/utils/vimAttach.js');
+		let written: unknown[] = [];
+		stubTauriInvoke(t, async (command, args) => {
+			written.push([command, args]);
+		});
 		for (const disposed of [false, true]) {
 			const { VimMode, controller } = await freshVim();
 			const events: string[] = [];
@@ -136,18 +145,14 @@ describe('vim clipboard registers', () => {
 				events.push(`map ${String(args[0])}`);
 				return realMapCommand.apply(this, args);
 			};
-			const written: unknown[] = [];
-			const invoke = (command: string, args: unknown) => {
-				written.push([command, args]);
-				return Promise.resolve();
-			};
+			written = [];
 			const adapter = { dispose() {} };
 			const initVimMode = () => {
 				events.push(controller.isValidRegister('+') ? 'attach with "+' : 'attach without "+');
 				return adapter;
 			};
 
-			const vim = attachVimMode({ initVimMode, VimMode }, {}, {}, invoke, () => disposed);
+			const vim = attachVimMode({ initVimMode, VimMode }, {}, {}, () => disposed);
 			if (disposed) {
 				assert.equal(vim, null, 'a disposed effect attaches nothing');
 				assert.deepEqual(events, ['map zb', 'map z-'], 'a disposed effect still patches the package');
@@ -566,5 +571,40 @@ describe('vim scroll commands', () => {
 		assert.equal(typeof action, 'function');
 		action!({}, { position: 'center' });
 		action!(undefined, undefined);
+	});
+});
+
+describe('monaco-vim against the installed monaco-editor', () => {
+	test("monaco-vim's import into monaco resolves through Vite", async () => {
+		// monaco-vim 0.4.4 is the latest release and is unmaintained. It imports
+		// monaco without an extension (`monaco-editor/esm/vs/editor/editor.api`).
+		// monaco-editor 0.56 changed its exports map from `"./*": "./*"` to
+		// `"./*": "./esm/vs/*.js"`, which doubles the prefix the specifier already
+		// carries, and a package with `exports` gets no filesystem fallback. That
+		// bump built clean, passed every test on three platforms, and shipped vim
+		// mode dead. So this asks the app's bundler to resolve the import, from the
+		// monaco-vim file the app gets, against the installed monaco-editor.
+		const { createServer } = await import('vite');
+		const root = fileURLToPath(new URL('..', import.meta.url));
+		const server = await createServer({
+			configFile: false,
+			root,
+			logLevel: 'silent',
+			server: { middlewareMode: true, ws: false, watch: null },
+			optimizeDeps: { noDiscovery: true, include: [] },
+		});
+		try {
+			const entry = await server.pluginContainer.resolveId('monaco-vim', join(root, 'src/lib/components/Editor.svelte'));
+			assert.ok(entry, 'Vite cannot resolve monaco-vim at all');
+			const specifiers = new Set([...readSource(entry.id).matchAll(/['"](monaco-editor\/[^'"]+)['"]/g)].map((m) => m[1]));
+			assert.ok(specifiers.size > 0, `found no monaco import in ${entry.id}; this test has nothing to ask about`);
+			const unresolved: string[] = [];
+			for (const specifier of specifiers) {
+				if (!(await server.pluginContainer.resolveId(specifier, entry.id))) unresolved.push(specifier);
+			}
+			assert.deepEqual(unresolved, [], "monaco-editor's exports map sends a monaco-vim import nowhere; vim mode will be dead");
+		} finally {
+			await server.close();
+		}
 	});
 });

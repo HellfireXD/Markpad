@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { invoke } from '@tauri-apps/api/core';
+	import { commands } from '../bindings.js';
 	import { openUrl } from '@tauri-apps/plugin-opener';
 	import { open, save } from '@tauri-apps/plugin-dialog';
 	import {
@@ -30,7 +30,7 @@
 		type SettingsRow,
 	} from '../utils/settingsPanes.js';
 	import { createSettingsOpen } from '../utils/settingsOpen.svelte.js';
-	import type { LanguageCode } from '../utils/i18n.js';
+	import type { LanguageCode, TranslationKey } from '../utils/i18n.js';
 	import { getEditorToolbarTools } from '../utils/editorToolbar.js';
 	import { getTitlebarToolbarActions, type TitlebarToolbarPlacement } from '../utils/titlebarToolbar.js';
 	import { DEFAULT_PREVIEW_MAX_WIDTH, normalizePreviewMaxWidth } from '../utils/previewWidth.js';
@@ -64,7 +64,7 @@
 		{ value: 'blue', color: '#438af3' },
 		{ value: 'cyan', color: '#2bb9b2' },
 		{ value: 'green', color: '#4db158' }
-	];
+	] as const;
 
 	type SettingsModalFrame = {
 		width: number;
@@ -459,7 +459,7 @@
 
 	async function loadVscodeThemes() {
 		try {
-			savedVscodeThemes = await invoke('get_saved_vscode_themes');
+			savedVscodeThemes = await commands.getSavedVscodeThemes();
 		} catch (e) {
 			console.error('Failed to load vscode themes:', e);
 		}
@@ -496,7 +496,7 @@
 		if (!themeImportUrl) return;
 		importingTheme = true;
 		try {
-			const name = await invoke<string>('fetch_vscode_theme', { url: themeImportUrl });
+			const name = await commands.fetchVscodeTheme(themeImportUrl);
 			themeImportUrl = '';
 			await loadVscodeThemes();
 			onSetTheme?.(`vscode:${name}`);
@@ -512,10 +512,10 @@
 		try {
 			const path = await save({ defaultPath: 'markpad-settings.json', filters: [{ name: 'JSON', extensions: ['json'] }] });
 			if (!path) return;
-			const names = await invoke<string[]>('get_saved_vscode_themes');
+			const names = await commands.getSavedVscodeThemes();
 			const themes: Record<string, string> = {};
-			for (const name of names) themes[name] = await invoke<string>('read_vscode_theme', { name });
-			await invoke('save_file_content', { path, content: exportSettings(settings, themes), encoding: 'UTF-8' });
+			for (const name of names) themes[name] = await commands.readVscodeTheme(name);
+			await commands.saveFileContent(path, exportSettings(settings, themes), 'UTF-8');
 		} catch (e) {
 			console.error('Failed to export settings:', e);
 			alert(`${t('settings.exportSettingsFailed', settings.language)}\n${e}`);
@@ -526,10 +526,10 @@
 		try {
 			const path = await open({ multiple: false, directory: false, filters: [{ name: 'JSON', extensions: ['json'] }] });
 			if (typeof path !== 'string') return;
-			const [content] = await invoke<[string, boolean, string]>('read_file_content_checked', { path });
+			const [content] = await commands.readFileContentChecked(path);
 			const file = parseSettingsFile(content);
 			for (const [name, json] of Object.entries(file.themes)) {
-				await invoke('install_vscode_theme', { name, json });
+				await commands.installVscodeTheme(name, json);
 			}
 			await loadVscodeThemes();
 			applySettings(settings, file.settings);
@@ -541,7 +541,7 @@
 
 	async function deleteTheme(name: string) {
 		try {
-			await invoke('delete_vscode_theme', { name });
+			await commands.deleteVscodeTheme(name);
 			if (theme === `vscode:${name}`) onSetTheme?.('system');
 			await loadVscodeThemes();
 		} catch (e) {
@@ -655,7 +655,7 @@
 						onclick={(e) => { e.stopPropagation(); highlightMenuOpen = !highlightMenuOpen; }}>
 							<div style="display: flex; align-items: center; gap: 8px;">
 							<div class="color-circle" style="background-color: {highlightColors.find(c => c.value === settings.highlightColor)?.color || 'var(--color-accent-fg)'}"></div>
-							<span>{t(`colors.${settings.highlightColor || 'default'}`, settings.language)}</span>
+							<span>{t(`colors.${settings.highlightColor || 'default'}` as TranslationKey, settings.language)}</span>
 						</div>
 							<svg class="select-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
 					</button>

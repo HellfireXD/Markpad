@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import postcss from 'postcss';
 
 import { containsUnusualLineTerminators } from 'monaco-editor/esm/vs/base/common/strings.js';
 import { EditorOptions, inUntrustedWorkspace, type UnicodeHighlightOptions } from 'monaco-editor/esm/vs/editor/common/config/editorOptions.js';
@@ -13,14 +14,16 @@ import { getMapForWordSeparators } from 'monaco-editor/esm/vs/editor/common/core
 import { USUAL_WORD_SEPARATORS } from 'monaco-editor/esm/vs/editor/common/core/wordHelper.js';
 import { language as markdownLanguage } from 'monaco-editor/esm/vs/basic-languages/markdown/markdown.js';
 
-import { getSupportedLanguages, type LanguageCode, t, type Translation } from '../src/lib/utils/i18n.js';
+import { getSupportedLanguages, type LanguageCode, t, type Translation, type TranslationKey } from '../src/lib/utils/i18n.js';
 import { translations } from './allTranslations.js';
+import { MONACO_IME_PATCH, MONACO_TEXTAREA_FILE, patchMonacoTextAreaForIme } from './monacoImePatch.mjs';
+import { readSource } from './sourceTree.js';
 import { editorLanguageFor } from '../src/lib/utils/editorLanguage.js';
 import { MARKDOWN_LINK_EXTENSIONS } from '../src/lib/utils/markdownLinks.js';
 import { createdEditorOptions, editorOptionsFromSettings, editorReadOnly, updatedEditorOptions } from '../src/lib/utils/editorOptions.js';
 import { markdownTokenRules, monacoThemeName, semanticTokenRules } from '../src/lib/utils/editorTheme.js';
-import { importedThemeRules, MARKDOWN_SCOPE_ALIASES, markdownKindColors, monacoTokenRules } from '../src/lib/utils/theme.js';
-import { encodeSemanticTokens, TOKEN_MODIFIERS, TOKEN_TYPES } from '../src/lib/utils/semanticTokens.js';
+import { importedThemeRules, MARKDOWN_SCOPE_ALIASES, markdownKindColors, monacoTokenRules, PREVIEW_KIND_VARS } from '../src/lib/utils/theme.js';
+import { encodeSemanticTokens, SEMANTIC_KINDS, TOKEN_MODIFIERS, TOKEN_TYPES } from '../src/lib/utils/semanticTokens.js';
 import { resolveExportImagePath } from '../src/lib/utils/exportHtml.js';
 import { DEFAULT_IMAGE_DIRECTORY, documentParentDir, encodeImageDestination, imageEmbed, resolveImageDirectory } from '../src/lib/utils/imageEmbed.js';
 import { resolveDocumentRelativePath } from '../src/lib/utils/markdown.js';
@@ -28,6 +31,7 @@ import { buildPasteProbe, findTokenAtOffset, getFrontMatterLineCount, isCodeToke
 import { clipboardTextForSelection, type EditingEditor, insertLink, insertTextAtCursor, wrapAsCodeBlock } from '../src/lib/utils/editorEdits.js';
 import { mountAfterLoad } from '../src/lib/utils/editorMount.js';
 import { pasteFromClipboard } from '../src/lib/utils/editorClipboard.js';
+import { stubTauriInvoke } from './tauriInvoke.js';
 import { paragraphAround } from '../src/lib/utils/focusParagraph.js';
 
 // WHAT THIS FILE COVERS, AND WHAT IT DOES NOT
@@ -55,8 +59,7 @@ describe('context menu labels', () => {
 	 * menu rendered the English label.
 	 *
 	 * These labels are held to a stricter bar than the dictionary at large.
-	 * settings.checks.test.ts reports per-locale gaps rather than failing on them,
-	 * because 19 locales are missing >100 keys and nobody should have to translate
+	 * A locale may leave keys untranslated (`LocaleTable` is partial), because 19 locales are missing >100 keys and nobody should have to translate
 	 * a new English string 25 times before landing it. That trade does not apply
 	 * here: this is a fixed list of a dozen context-menu entries, all 26 languages
 	 * define all of them today, and adding an eleventh action means adding a row to
@@ -72,7 +75,7 @@ describe('context menu labels', () => {
 	}
 
 	// The markdown formatting entries that used to be English string literals.
-	const FORMATTING_ACTIONS: ReadonlyArray<[actionId: string, key: string, englishLabel: string]> = [
+	const FORMATTING_ACTIONS: ReadonlyArray<[actionId: string, key: TranslationKey, englishLabel: string]> = [
 		['fmt-strikethrough', 'menu.strikethrough', 'Strikethrough'],
 		['fmt-inline-code', 'menu.inlineCode', 'Inline Code'],
 		['fmt-code-block', 'menu.codeBlock', 'Code Block'],
@@ -723,6 +726,33 @@ describe('editor theme', () => {
 // against the legend the encoder indexes, the legend against the theme rules
 // that style it, and the delta encoding Monaco decodes.
 describe('semantic tokens', () => {
+	test('no kind falls through to an imported theme that has nothing to say', () => {
+		// The failure this guards is silent and total. A semantic token whose type
+		// the theme does not name resolves to the theme's *root* rule, whose
+		// foreground is a real colour id rather than "none"
+		// (`semanticTokensProviderStyling.js`, the `if (tokenStyle.foreground)`
+		// branch), and `sparseTokensStore` then masks the grammar's colour out and
+		// paints that plain default over it. An imported theme lost its heading,
+		// link, quote and inline-code colours to this path the moment the semantic
+		// layer shipped, and nothing in either file said so.
+		const emitted: readonly string[] = SEMANTIC_KINDS;
+
+		const rules = importedThemeRules(
+			[{ scope: 'markup.bold', settings: { foreground: '#e06c75', fontStyle: 'bold' } }],
+			true,
+		);
+		// `base: 'vs-dark'` with `inherit: true` contributes the default foreground
+		// that every unmatched token resolves to.
+		const theme = TokenTheme.createFromParsedTokenTheme(
+			parseTokenTheme([{ token: '', foreground: '#d4d4d4', background: '#1e1e1e' }, ...rules]),
+			[],
+		);
+		const fallthrough = theme._match('a-token-no-rule-names').metadata;
+
+		const unstyled = emitted.filter((kind) => theme._match(kind).metadata === fallthrough);
+		assert.deepEqual(unstyled, [], 'these repaint an imported theme with its own default foreground');
+	});
+
 	test('the legend and the theme agree on what can be styled', () => {
 		// A rule for a type the legend lacks styles nothing; a type with no rule
 		// paints whatever the grammar left, which for a construct the grammar has
@@ -1258,11 +1288,12 @@ describe('paste URL context', () => {
 		assert.ok(languages.length > 0 && languages.every((id) => id === 'markdown'), `tokenized as ${languages}`);
 	});
 
-	test('the paste path consults the context guard before building a link', async () => {
+	test('the paste path consults the context guard before building a link', async (t) => {
 		// The editor's own paste handler, with the clipboard holding a URL and the
 		// caret in a fence, then in prose: the guard decides between the bare URL
 		// and `[label](url)`.
 		const url = 'https://example.com/a';
+		stubTauriInvoke(t, async (cmd) => (cmd === 'clipboard_read_text' ? url : null));
 		const pasteInto = async (lines: string[], line: number, column: number) => {
 			const edits: { source: string; text: string }[] = [];
 			const selection = {
@@ -1294,7 +1325,6 @@ describe('paste URL context', () => {
 						editor: { tokenize: (text: string) => tokenize(text) },
 						Selection: class {},
 					}) as never,
-				invoke: async (cmd) => (cmd === 'clipboard_read_text' ? url : null),
 				// No document path: the image branch is skipped, as for an untitled tab.
 				tabs: { activeTab: { path: undefined } },
 				settings: { imageDirectory: 'img', macosImageScaling: false },
@@ -1553,5 +1583,94 @@ describe('editor mount', () => {
 		assert.deepEqual(events, ['create']);
 		cleanup();
 		assert.deepEqual(events, ['create', 'teardown']);
+	});
+});
+
+// The build-time patch to Monaco that stops the IME composition overlay from
+// jittering (#724). See the header of monacoImePatch.mjs for the mechanism.
+//
+// The patch runs against the INSTALLED Monaco file, which is input here, not a
+// source contract: the two source lines the patch anchors on must still exist
+// exactly once in the file it targets. A Monaco bump that moves or
+// rewrites either line — including the bump that finally carries the upstream
+// fix, microsoft/vscode#333909 — turns this red, which is the signal to delete
+// the patch rather than let it silently stop applying.
+describe('Monaco IME patch', () => {
+	// Through `readSource`: the anchors are written against `\n`, and it is what
+	// keeps them matching on a Windows checkout.
+	const textAreaSource = readSource(
+		new URL(`../node_modules/monaco-editor/esm/vs/editor/browser/controller/editContext/textArea/${MONACO_TEXTAREA_FILE}`, import.meta.url),
+	);
+
+	test('the patch turns both conditions into "unless a screen reader is attached"', () => {
+		const patched = patchMonacoTextAreaForIme(textAreaSource);
+		for (const { from, to } of MONACO_IME_PATCH) {
+			assert.equal(patched.includes(from), false, 'the original condition is gone');
+			assert.equal(patched.split(to).length - 1, 1, 'the replacement is there once');
+		}
+		// Nothing else moved: the patch is those two lines and no more.
+		assert.equal(patched.length, textAreaSource.length + MONACO_IME_PATCH.reduce((n, p) => n + p.to.length - p.from.length, 0));
+	});
+
+	test('a Monaco that no longer has the anchors fails the build instead of shipping unpatched', () => {
+		assert.throws(
+			() => patchMonacoTextAreaForIme(textAreaSource.replace(MONACO_IME_PATCH[0].from, '')),
+			/expected exactly one match/,
+		);
+	});
+});
+
+// The editor's Markdown colours and the preview's construct colours both meet
+// styles.css only through a custom-property name, which no compiler follows.
+describe('editor colours against the stylesheet', () => {
+	const styles = postcss.parse(readSource('src/styles.css'));
+
+	/** A `--color-*` value from the top-level rule whose selector list is exactly `selector`. */
+	function paletteColor(selector: string, name: string): string {
+		let value: string | undefined;
+		styles.each((node) => {
+			if (value !== undefined || node.type !== 'rule' || node.selector !== selector) return;
+			node.walkDecls(`--color-${name}`, (decl) => {
+				value ??= decl.value;
+			});
+		});
+		assert.ok(value, `styles.css must define --color-${name} under ${selector}`);
+		assert.match(value, /^#[0-9a-fA-F]{6}$/);
+		return value.slice(1).toLowerCase();
+	}
+
+	test('the colours are the app palette, not a second one', () => {
+		// One-way duplication: `defineTheme` takes hex strings and never sees the
+		// stylesheet, so the literals in editorTheme.ts have to be checked against
+		// the custom properties everything else in the app resolves.
+		const blocks = { light: ':root', dark: ':root[data-theme="dark"]' } as const;
+		for (const appearance of ['light', 'dark'] as const) {
+			const color = (name: string) => paletteColor(blocks[appearance], name);
+			const byToken = new Map(markdownTokenRules(appearance).map((rule) => [rule.token, rule.foreground]));
+			assert.equal(byToken.get('keyword.md'), color('accent-fg'));
+			assert.equal(byToken.get('string.md'), color('success-fg'));
+			assert.equal(byToken.get('variable.md'), color('success-fg'));
+			assert.equal(byToken.get('strong.md'), color('attention-fg'));
+			assert.equal(byToken.get('emphasis.md'), color('attention-fg'));
+			assert.equal(byToken.get('string.link.md'), color('done-fg'));
+			assert.equal(byToken.get('escape.md'), color('fg-muted'));
+			assert.equal(byToken.get('variable.source.md'), color('fg-default'));
+			assert.equal(byToken.get('keyword.table.header.md'), color('fg-default'));
+		}
+	});
+
+	test('every construct colour the importer writes is read by the stylesheet', () => {
+		// #676: the importer writes `--md-strong`, `styles.css` reads it, and no
+		// type or import holds them together. Renaming one silently drops the colour.
+		const readWithFallback = new Set<string>();
+		styles.walkDecls((decl) => {
+			for (const match of decl.value.matchAll(/var\(\s*(--[\w-]+)\s*,/g)) readWithFallback.add(match[1]);
+		});
+		for (const [kind, cssVar] of PREVIEW_KIND_VARS) {
+			// The comma is the fallback. Without one, a construct the theme does not
+			// name renders with no colour at all rather than with the value the rule
+			// carried before the import.
+			assert.ok(readWithFallback.has(cssVar), `${cssVar} is written for \`${kind}\` and read by no rule with a fallback`);
+		}
 	});
 });

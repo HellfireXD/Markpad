@@ -118,6 +118,12 @@ jobs:
       - name: check frontend
         run: npm run check
 
+      # The code conventions no type can express (one implementation of a fixed
+      # behaviour, Rust reached only through the generated bindings, ...), as
+      # lint rules in eslint.config.js. Each message says why.
+      - name: lint frontend conventions
+        run: npm run lint
+
       - name: run frontend behavior tests
         run: npm test
 
@@ -126,6 +132,17 @@ jobs:
       # non-overlapping globs, so a file is run by exactly one of these steps.
       - name: run frontend behavior tests (vitest)
         run: npm run test:vitest
+
+      # Monaco is most of the app's JavaScript and only the editor needs it, so
+      # Editor.svelte loads it with `await import()`. A static import anywhere in
+      # the startup graph folds it back into the chunks every window parses on
+      # first paint, and nothing else fails. This builds the frontend and reads
+      # the Vite manifest (which chunks load at startup) and their source maps
+      # (which modules each chunk holds). Measured: about 6 seconds.
+      - name: monaco is not in the startup chunks
+        run: |
+          npx vite build --sourcemap
+          node scripts/check-startup-chunk.mjs
 
       # Nothing had ever checked Rust formatting, so master drifted to 47
       # rustfmt diffs across all six source files -- not because anyone
@@ -143,10 +160,19 @@ jobs:
           cd src-tauri
           cargo fmt --check
 
+      # `--locked` fails the run when Cargo.lock no longer matches Cargo.toml
+      # (a version bump that skipped the lock), instead of rewriting it here.
       - name: run cargo test
         run: |
           cd src-tauri
-          cargo test
+          cargo test --locked
+
+      # `cargo test` just ran `export_bindings`, which rewrites
+      # src/lib/bindings.ts from the registered commands and events. A Rust
+      # command or event changed without the regenerated file committed leaves a
+      # diff here, before the frontend can drift from what Rust answers.
+      - name: check generated bindings are committed
+        run: git diff --exit-code src/lib/bindings.ts
 
       # `-D warnings` is only defensible because the count is currently zero:
       # the two that existed (a redundant `'static` on a const, a `push_str`
@@ -159,4 +185,4 @@ jobs:
       - name: run clippy
         run: |
           cd src-tauri
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --locked --all-targets -- -D warnings

@@ -1,6 +1,6 @@
 import type { settings as Settings } from '../stores/settings.svelte.js';
 import type { Tab, tabManager as TabManager } from '../stores/tabs.svelte.js';
-import type { LanguageCode } from '../utils/i18n.js';
+import type { LanguageCode, TranslationKey } from '../utils/i18n.js';
 import {
 	asBufferLine,
 	tabAnchorForEditorTopLine,
@@ -31,7 +31,7 @@ export type ViewModeOptions = {
 	renderTabPreviewFromRaw: (tab: Tab) => Promise<void>;
 	tick: () => Promise<void>;
 	addToast: (message: string, type?: 'info' | 'error' | 'warning') => unknown;
-	t: (key: string, language: LanguageCode) => string;
+	t: (key: TranslationKey, language: LanguageCode) => string;
 	// The viewer's panes and measurements, read when a handler runs.
 	readonly editorPane: ViewModeEditorPane | null | undefined;
 	readonly markdownBody: HTMLElement | null | undefined;
@@ -323,7 +323,7 @@ export function createViewMode(o: ViewModeOptions) {
 	 * toolbar, the title bar, and Monaco's own command.
 	 *
 	 * One function so the chord cannot mean two things depending on where the
-	 * caret happens to be (`shortcuts.checks.test.ts` holds the two layers
+	 * caret happens to be (`shortcuts.editor.test.ts` holds the two layers
 	 * together), and so "take me to the editor" behaves the same whether the
 	 * reader asked for it with a key or with a menu item.
 	 */
