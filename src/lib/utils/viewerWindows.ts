@@ -5,6 +5,7 @@ export type ViewerWindowEntry = {
 	label: string;
 	number: number;
 	tag_name: string | null;
+	tag_color: string | null;
 	active_tab_title: string;
 	tab_count: number;
 };

@@ -649,6 +649,19 @@ test('the legacy full-width key is honoured once and then superseded', () => {
 	assert.equal(createStore().previewFullWidth, false);
 });
 
+test('the open-file target keeps today\'s behaviour unless "ask" was chosen (#1029)', () => {
+	resetStorage();
+	assert.equal(createStore().openFileTarget, 'lastWindow', 'a fresh install opens files where it always has');
+
+	resetStorage({ 'files.openFileTarget': 'ask' });
+	assert.equal(createStore().openFileTarget, 'ask');
+
+	// An unknown value — a typo, or a choice a later version added — must not
+	// turn the picker on, or off, by accident.
+	resetStorage({ 'files.openFileTarget': 'banana' });
+	assert.equal(createStore().openFileTarget, 'lastWindow');
+});
+
 /*
  * ---------------------------------------------------------------------------
  * Task 4 — language tag resolution.

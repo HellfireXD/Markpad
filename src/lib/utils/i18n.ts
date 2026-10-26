@@ -140,6 +140,10 @@ const en: Translation = {
         restoreStateOnReopenHint: 'Reopens your last windows and tabs. File contents are read from disk.',
         closeWindowWithLastTab: 'Close Window with Last Tab',
         openFileMode: 'Open existing files in',
+        openFileTarget: 'Open external files in',
+        openFileTargetHint: 'Only asks when more than one window is open. Files you open from inside Markpad always open where you are.',
+        openFileTargetLastWindow: 'Last window',
+        openFileTargetAsk: 'Ask me',
         newFileDefaultMode: 'New file opens in editor',
         showRecentFiles: 'Show Recent Files',
         showFolderForDuplicateNames: 'Show Folder for Duplicate Names',
@@ -372,7 +376,11 @@ const en: Translation = {
         youHaveUnsavedChanges: 'You have unsaved changes in "{title}". Do you want to save them before closing?',
         openExportedFileTitle: 'Open exported file?',
         openExportedHtmlMessage: 'HTML export was saved. Open it now?',
-        openExportedPdfMessage: 'PDF export was saved. Open it now?'
+        openExportedPdfMessage: 'PDF export was saved. Open it now?',
+        openFileInTitle: 'Open file in…',
+        openFilesInTitle: 'Open {{count}} files in…',
+        openFileInButton: 'Open',
+        thisWindow: 'this window'
     },
     update: {
         checkingHeader: 'Checking for updates…',

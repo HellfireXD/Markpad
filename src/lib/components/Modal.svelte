@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { fade, scale } from 'svelte/transition';
 	import { t } from '../utils/i18n.js';
 	import { settings } from '../stores/settings.svelte.js';
@@ -11,6 +12,9 @@
 		showSave = false,
 		showInput = false,
 		inputValue = $bindable(''),
+		confirmLabel,
+		children,
+		onkeydown,
 		onconfirm,
 		onsave,
 		oncancel,
@@ -22,6 +26,21 @@
 		showSave?: boolean;
 		showInput?: boolean;
 		inputValue?: string;
+		/**
+		 * Names the confirm button after what the dialog is for ("Open"),
+		 * instead of the Save/Discard pair the unsaved-changes prompt uses. A
+		 * named action is the one the dialog exists to offer, so it is also
+		 * the primary button, which is the one focused on open.
+		 */
+		confirmLabel?: string;
+		/** Content under the message, such as the window list of the open-file picker. */
+		children?: Snippet;
+		/**
+		 * Sees every key before the dialog's own handling, for keys that
+		 * content in `children` owns, such as arrow keys in a list. Calling
+		 * `preventDefault` stops the dialog from handling that key as well.
+		 */
+		onkeydown?: (e: KeyboardEvent) => void;
 		onconfirm: () => void;
 		onsave?: () => void;
 		oncancel: () => void;
@@ -53,6 +72,8 @@
 	});
 
 	function handleKeydown(e: KeyboardEvent) {
+		onkeydown?.(e);
+		if (e.defaultPrevented) return;
 		// While the user is typing in the input, plain letters are text —
 		// the y/n confirm/cancel shortcuts must not fire.
 		const typingInInput = showInput && e.target === inputElement;
@@ -136,13 +157,18 @@
 				{#if showInput}
 					<input class="modal-input" type="text" bind:this={inputElement} bind:value={inputValue} spellcheck="false" />
 				{/if}
+				{@render children?.()}
 			</div>
 			<div class="modal-footer">
 					<button class="modal-btn secondary" onclick={oncancel}>{t('settings.cancel', settings.language)}</button>
 					<div class="footer-spacer"></div>
-					<button class="modal-btn secondary" onclick={onconfirm}>
-						{kind === 'warning' ? t('settings.discard', settings.language) : t('settings.save', settings.language)}
-					</button>
+					{#if confirmLabel}
+						<button class="modal-btn primary" onclick={onconfirm}>{confirmLabel}</button>
+					{:else}
+						<button class="modal-btn secondary" onclick={onconfirm}>
+							{kind === 'warning' ? t('settings.discard', settings.language) : t('settings.save', settings.language)}
+						</button>
+					{/if}
 					{#if showSave}
 						<button class="modal-btn primary" onclick={onsave}>{t('settings.save', settings.language)}</button>
 					{/if}

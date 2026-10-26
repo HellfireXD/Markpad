@@ -94,7 +94,7 @@ import {
 	type MarkdownLinkTarget as RelativeMarkdownTarget,
 } from './utils/markdownLinks.js';
 import { resolveLocalFileLinkPath } from './utils/localFileLinks.js';
-import { canonicalizePath, isSameFilePath } from './utils/pathIdentity.js';
+import { basename, canonicalizePath, isSameFilePath } from './utils/pathIdentity.js';
 import { findSeedFromSelection } from './utils/findSeed.js';
 import { normalizeAssetPath } from './utils/exportHtml.js';
 import {
@@ -130,6 +130,9 @@ import { jumpScrollBehavior } from './utils/motion.js';
 import { createWindowSession } from './sessions/windowSession.svelte.js';
 import { createBoundedWriter, restoreRecords, recoverySnapshot } from './sessions/unsavedRecovery.js';
 import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from './sessions/documentSession.svelte.js';
+import { createOpenFilePicker } from './sessions/openFilePicker.svelte.js';
+import type { ViewerWindowEntry } from './utils/viewerWindows.js';
+import WindowPickerList from './components/WindowPickerList.svelte';
 
 	import 'highlight.js/styles/github-dark.css';
 	import 'katex/dist/katex.min.css';
@@ -607,6 +610,25 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		if (modalState.resolve) modalState.resolve('discard');
 		modalState.show = false;
 	}
+
+	// Set once this window has taken its launch files (`send_markdown_path`),
+	// which are never asked about. See `createOpenFilePicker`.
+	let launchFilesTaken = false;
+
+	const openFilePicker = createOpenFilePicker({
+		selfLabel: appWindow.label,
+		setting: () => settings.openFileTarget,
+		isReady: () => launchFilesTaken,
+		isOpenHere: (path) => tabManager.tabs.some((tab) => isSameFilePath(tab, { path })),
+		listWindows: () => invoke<ViewerWindowEntry[]>('list_viewer_windows'),
+		openHere: async (paths) => {
+			for (const path of paths) await loadMarkdown(path);
+		},
+		sendTo: async (label, paths) => {
+			await emitTo(label, 'open-files-here', paths);
+			await invoke('focus_window', { label });
+		},
+	});
 
 	function handleSplitterKeyDown(e: KeyboardEvent) {
 		const activeTab = tabManager.activeTab;
@@ -3504,8 +3526,8 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			mode,
 			osType: settings.osType,
 			isSplit: !!tabManager.activeTab?.isSplit,
-			overlayOpen: showSettings || modalState.show || promptModal.show || showHome,
-			dialogOpen: modalState.show || promptModal.show,
+			overlayOpen: showSettings || modalState.show || promptModal.show || openFilePicker.state.show || showHome,
+			dialogOpen: modalState.show || promptModal.show || openFilePicker.state.show,
 			isEditing,
 			editorHasFocus: !!editorPaneEl && !!active && editorPaneEl.contains(active),
 		};
@@ -3927,7 +3949,13 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			const listeners: [string, EventCallback<any>][] = [
 				['file-path', (event) => {
 					const filePath = event.payload as string;
-					if (filePath) loadMarkdown(filePath);
+					if (filePath) openFilePicker.request(filePath);
+				}],
+				// The answer to another window's open-file picker: load here, and
+				// do not ask again.
+				['open-files-here', async (event) => {
+					const paths = Array.isArray(event.payload) ? event.payload : [];
+					for (const path of paths) if (typeof path === 'string' && path) await loadMarkdown(path);
 				}],
 				['menu-tab-rename', async (event) => {
 					const tabId = event.payload as string;
@@ -4104,6 +4132,7 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 			} catch (error) {
 				console.error('Error receiving Markdown file path:', error);
 			}
+			launchFilesTaken = true;
 
 			if (!isDisposed) mode = 'app';
 		};
@@ -4654,6 +4683,20 @@ import { claimTabForRead, createDocumentSession, type LoadMarkdownOptions } from
 		bind:inputValue={promptModal.value}
 		onconfirm={() => closePrompt(promptModal.value)}
 		oncancel={() => closePrompt(null)} />
+
+	<Modal
+		show={openFilePicker.state.show}
+		title={openFilePicker.state.paths.length > 1
+			? t('modal.openFilesInTitle', settings.language).replace('{{count}}', String(openFilePicker.state.paths.length))
+			: t('modal.openFileInTitle', settings.language)}
+		message={openFilePicker.state.paths.map((path) => basename(path) || path).join(', ')}
+		kind="info"
+		confirmLabel={t('modal.openFileInButton', settings.language)}
+		onkeydown={openFilePicker.keydown}
+		onconfirm={() => void openFilePicker.confirm()}
+		oncancel={openFilePicker.cancel}>
+		<WindowPickerList picker={openFilePicker} selfLabel={appWindow.label} />
+	</Modal>
 
 	{#if identifyFlash}
 		<div class="identify-flash" transition:fade={{ duration: 150 }}>
