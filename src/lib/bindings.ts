@@ -47,6 +47,12 @@ export const commands = {
 	 *  The launch's files, handed once to the launch window. Every window asks;
 	 *  the others, and any later ask, get nothing, so a new window never reopens
 	 *  the files the app was started with.
+	 * 
+	 *  Except the ones a reopened window (#990) is restoring a tab on: those go to
+	 *  that window instead of becoming a second copy in the launch window (#1001
+	 *  sends every launch file here). The other windows may not have restored, or
+	 *  even started, yet, so `held_files` reads their snapshots. A window that
+	 *  asks later takes its share here; one that already asked is sent it.
 	 */
 	sendMarkdownPath: () => __TAURI_INVOKE<string[]>("send_markdown_path"),
 	/**
@@ -242,6 +248,11 @@ export const commands = {
 	 */
 	createTransferWindow: (token: string, tagName: string | null) => __TAURI_INVOKE<null>("create_transfer_window", { token, tagName }),
 	setWindowMeta: (tagName: string | null, tagColor: string | null, activeTabTitle: string, tabCount: number) => __TAURI_INVOKE<void>("set_window_meta", { tagName, tagColor, activeTabTitle, tabCount }),
+	/**
+	 *  A viewer window's report of the files it has open, sent once its restore
+	 *  has finished and again whenever its tabs change. See `file_holder`.
+	 */
+	setWindowFiles: (files: string[]) => __TAURI_INVOKE<void>("set_window_files", { files }),
 	listViewerWindows: () => __TAURI_INVOKE<WindowListEntry[]>("list_viewer_windows"),
 	isWindowTagTaken: (name: string) => __TAURI_INVOKE<boolean>("is_window_tag_taken", { name }),
 	offerTabToWindow: (targetLabel: string, token: string) => __TAURI_INVOKE<null>("offer_tab_to_window", { targetLabel, token }),

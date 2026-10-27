@@ -144,6 +144,7 @@ fn bindings_builder() -> tauri_specta::Builder<tauri::Wry> {
             tab_transfer::refresh_detached_tab,
             window_runtime::create_transfer_window,
             window_runtime::set_window_meta,
+            window_runtime::set_window_files,
             window_runtime::list_viewer_windows,
             window_runtime::is_window_tag_taken,
             window_runtime::offer_tab_to_window,

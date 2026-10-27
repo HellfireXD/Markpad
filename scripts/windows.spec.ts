@@ -40,7 +40,7 @@ const { FolderManager, folderName, isInside, snapshotFolder } = await import('..
 const { HOME_TAB_PATH, isHomePath, showsHomeScreen } = await import('../src/lib/utils/homeTab.js');
 const { hasRealFilePath } = await import('../src/lib/utils/tabFileActions.js');
 const { openPinnedTagWindow, pinnedTagFromWindowLabel } = await import('../src/lib/utils/pinnedTagWindow.js');
-const { reportWindowMeta } = await import('../src/lib/sessions/windowMeta.svelte.js');
+const { openFileKeys, reportWindowMeta } = await import('../src/lib/sessions/windowMeta.svelte.js');
 const { runeEffect } = await import('./runeEffect.svelte.js');
 const { getSupportedLanguages, t } = await import('../src/lib/utils/i18n.js');
 const { viewerCommandFor } = await import('../src/lib/utils/viewerKeymap.js');
@@ -1151,6 +1151,54 @@ describe('a pinned group opens in a window that holds it', () => {
 		} finally {
 			dispose();
 		}
+	});
+});
+
+describe('a window reports the files it has open (#1029)', () => {
+	const calls: { cmd: string; args: any }[] = [];
+	useTauri({
+		invoke: async (cmd: string, args: any) => {
+			calls.push({ cmd, args });
+			return cmd === 'get_os_type' ? 'macos' : null;
+		},
+	});
+	const filesCalls = () => calls.filter((call) => call.cmd === 'set_window_files');
+
+	test('only once its restore has finished, and then as its tabs change', () => {
+		// Rust answers "which window has this file?" from a window's snapshot
+		// until its first report. An empty report sent before the restore would
+		// hide the snapshot while its files are still on their way in.
+		tabManager.closeAll();
+		calls.length = 0;
+		let meta!: { markReady: () => void };
+		const dispose = runeEffect(() => void (meta = reportWindowMeta(tabManager, true)));
+		try {
+			flushSync();
+			assert.deepEqual(filesCalls(), [], 'reported before the restore finished');
+
+			tabManager.addTab('/notes/a.md');
+			meta.markReady();
+			flushSync();
+			assert.deepEqual(filesCalls().at(-1)?.args.files, ['/notes/a.md']);
+
+			tabManager.addTab('/notes/b.md');
+			flushSync();
+			assert.deepEqual(filesCalls().at(-1)?.args.files, ['/notes/a.md', '/notes/b.md']);
+		} finally {
+			dispose();
+		}
+	});
+
+	test('a file is reported by its identity when known, and untitled and home tabs are not files', () => {
+		assert.deepEqual(
+			openFileKeys([
+				{ path: 'C:/Notes/a.md', pathKey: 'C:\\Notes\\a.md' },
+				{ path: '/notes/unresolved.md' },
+				{ path: '' },
+				{ path: HOME_TAB_PATH },
+			]),
+			['C:\\Notes\\a.md', '/notes/unresolved.md'],
+		);
 	});
 });
 
