@@ -531,6 +531,28 @@ fn held_files<R: Runtime>(app: &AppHandle<R>) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
+/// Whether a window this launch reopens (#990) is restoring a tab on `path`,
+/// read from the snapshots on disk. True before any of those windows exist —
+/// at setup, and while the launch's files are still being queued — which is
+/// when the launch window would otherwise be sent the file as `file-path` and
+/// open a second copy of it. `send_markdown_path` delivers it either way.
+fn snapshot_restores(config: &Path, path: &str, key: &str) -> bool {
+    remembered_window_labels_in(config).iter().any(|label| {
+        load_window_state_in(config, label).is_some_and(|json| {
+            snapshot_paths(&json)
+                .iter()
+                .any(|restored| restored == path || file_key(restored) == key)
+        })
+    })
+}
+
+/// `snapshot_restores` for the running app.
+pub fn reopened_window_restores<R: Runtime>(app: &AppHandle<R>, path: &str) -> bool {
+    app.path()
+        .app_config_dir()
+        .is_ok_and(|config| snapshot_restores(&config, path, &file_key(path)))
+}
+
 /// The open window that already has `path` open, if any — the window a file
 /// opened from outside belongs in, whichever one is focused.
 fn holder_window<R: Runtime>(
@@ -1258,6 +1280,12 @@ pub fn deliver_opened_path<R: Runtime>(app: &AppHandle<R>, path: String) {
     let state = app.state::<AppState>();
     let queued = queue_startup_file(&mut lock_recover(&state.startup_files), &path);
     let target = if queued {
+        // Queued for `send_markdown_path`, which routes it. The direct send to
+        // the launch window is a second channel (#547), and for a file a
+        // reopened window is restoring it would be a second copy.
+        if reopened_window_restores(app, &path) {
+            return;
+        }
         app.get_webview_window(LAUNCH_LABEL)
     } else {
         holder_window(app, &path, None).or_else(|| pick_delivery_window(app))
@@ -2249,6 +2277,35 @@ mod tests {
             route_launch_files(&held, vec!["/n/a.md".to_string()], |p| p.to_string());
         assert_eq!(here, vec!["/n/a.md"]);
         assert!(elsewhere.is_empty());
+    }
+
+    #[test]
+    fn a_launch_file_a_reopened_window_restores_is_not_sent_to_the_launch_window() {
+        let config = temp_dir("restores");
+        // The pinned window from the report: its label, its three files.
+        save_window_state_in(
+            &config,
+            "window-pinned-54657374205461672031-1",
+            r#"{"tabs":[{"path":"/t/Test_file_1.md"},{"path":"/t/Test_file_2.md"}]}"#,
+        )
+        .unwrap();
+        // The launch window's own snapshot names a file too, but its own tabs
+        // are not "another window's"; it is not one the launch reopens.
+        save_window_state_in(&config, "main", r#"{"tabs":[{"path":"/t/main.md"}]}"#).unwrap();
+
+        assert!(snapshot_restores(
+            &config,
+            "/t/Test_file_2.md",
+            "/t/Test_file_2.md"
+        ));
+        assert!(!snapshot_restores(&config, "/t/main.md", "/t/main.md"));
+        assert!(!snapshot_restores(&config, "/t/new.md", "/t/new.md"));
+        // No session at all: nothing is held, so nothing changes.
+        assert!(!snapshot_restores(
+            &temp_dir("restores-empty"),
+            "/t/a.md",
+            "/t/a.md"
+        ));
     }
 
     #[test]

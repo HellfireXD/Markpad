@@ -263,10 +263,17 @@ fn setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::error::
     // Same vetting as `send_markdown_path`, which reads the same argv:
     // the frontend consumes BOTH channels, so a path this one lets
     // through reaches `loadMarkdown` no matter what the other decides.
+    //
+    // Not sent here when a window the launch reopens is restoring it: then
+    // it belongs in that window, and `send_markdown_path` routes it there
+    // (#1029). Sending it here as well opened a second copy in this one.
     let startup_files =
         window_runtime::startup_paths(&args, &std::env::current_dir().unwrap_or_default());
 
-    if let Some(path) = startup_files.first() {
+    if let Some(path) = startup_files
+        .first()
+        .filter(|path| !window_runtime::reopened_window_restores(app.handle(), path))
+    {
         let _ = window_runtime::FilePath(path.clone()).emit(&window);
         window_runtime::bring_to_front(&window);
     }
