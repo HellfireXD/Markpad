@@ -109,6 +109,10 @@ struct LaunchRouting {
     routed: HashMap<String, Vec<String>>,
     /// `windows-restored` has been sent. It is sent once per run.
     restored: bool,
+    /// The last window that took launch files, brought back to the front once
+    /// every window has restored: a window that finishes restoring later comes
+    /// up over it.
+    took_files: Option<String>,
 }
 
 /// Locks `mutex`, recovering the guarded value if a previous holder panicked.
@@ -1599,10 +1603,12 @@ pub fn send_markdown_path(
         .asked
         .insert(label.clone());
     if label != LAUNCH_LABEL {
-        let files = lock_recover(&state.launch_routing)
-            .routed
-            .remove(&label)
-            .unwrap_or_default();
+        let mut routing = lock_recover(&state.launch_routing);
+        let files = routing.routed.remove(&label).unwrap_or_default();
+        if !files.is_empty() {
+            routing.took_files = Some(label.clone());
+        }
+        drop(routing);
         if !files.is_empty() {
             if let Some(window) = app.get_webview_window(&label) {
                 bring_to_front(&window);
@@ -1626,6 +1632,7 @@ pub fn send_markdown_path(
             routing.routed.entry(holder).or_default().extend(paths);
             continue;
         }
+        routing.took_files = Some(holder.clone());
         drop(routing);
         if let Some(window) = app.get_webview_window(&holder) {
             for path in paths {
@@ -1634,12 +1641,16 @@ pub fn send_markdown_path(
             bring_to_front(&window);
         }
     }
+    if !here.is_empty() {
+        lock_recover(&state.launch_routing).took_files = Some(label);
+    }
     announce_restored(&app, None);
     here
 }
 
-/// Sends `windows-restored` to every window once every open viewer window
-/// has asked `send_markdown_path`, which each does only after its restore and
+/// Sends `windows-restored` to every window, and brings the last window that
+/// took launch files back to the front, once every open viewer window has
+/// asked `send_markdown_path`, which each does only after its restore and
 /// its first report (`set_window_meta`). Asked on every ask, and when a window
 /// closes, since a window that closes mid-startup never asks. `closing` is
 /// that window, still listed while it is being destroyed.
@@ -1656,8 +1667,12 @@ fn announce_restored<R: Runtime>(app: &AppHandle<R>, closing: Option<&str>) {
         return;
     }
     routing.restored = true;
+    let took_files = routing.took_files.take();
     drop(routing);
     let _ = WindowsRestored.emit(app);
+    if let Some(window) = took_files.and_then(|label| app.get_webview_window(&label)) {
+        bring_to_front(&window);
+    }
 }
 
 /// Holds this window in front of the other viewer windows while its open-file
