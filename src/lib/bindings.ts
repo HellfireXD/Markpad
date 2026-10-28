@@ -253,6 +253,8 @@ export const commands = {
 	 *  has finished and again whenever its tabs change. See `file_holder`.
 	 */
 	setWindowFiles: (files: string[]) => __TAURI_INVOKE<void>("set_window_files", { files }),
+	/**  Whether `windows-restored` has been sent, for a window that started after it. */
+	windowsRestored: () => __TAURI_INVOKE<boolean>("windows_restored"),
 	listViewerWindows: () => __TAURI_INVOKE<WindowListEntry[]>("list_viewer_windows"),
 	isWindowTagTaken: (name: string) => __TAURI_INVOKE<boolean>("is_window_tag_taken", { name }),
 	offerTabToWindow: (targetLabel: string, token: string) => __TAURI_INVOKE<null>("offer_tab_to_window", { targetLabel, token }),
@@ -320,6 +322,7 @@ export const events = {
 	folderChanged: makeEvent<FolderChanged, FolderChanged>("folder-changed"),
 	tabTransferClaimed: makeEvent<TabTransferClaimed, TabTransferClaimed>("tab-transfer-claimed"),
 	tabTransferOffer: makeEvent<TabTransferOffer, TabTransferOffer>("tab-transfer-offer"),
+	windowsRestored: makeEvent<WindowsRestored, WindowsRestored>("windows-restored"),
 };
 
 /* Constants */
@@ -456,6 +459,13 @@ export type WindowMeta = {
 	active_tab_title: string,
 	tab_count: number,
 };
+
+/**
+ *  `windows-restored`: every window of the launch has finished its restore, so
+ *  the window list is complete. Sent once, to every window. See
+ *  `announce_restored`.
+ */
+export type WindowsRestored = null;
 
 /* Tauri Specta runtime */
 type EventEmit<T> = [T] extends [null] ? () => Promise<void> : (payload: T) => Promise<void>;

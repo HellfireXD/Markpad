@@ -95,7 +95,7 @@ import {
 	type MarkdownLinkTarget as RelativeMarkdownTarget,
 } from './utils/markdownLinks.js';
 import { followDocumentLink, handlePreviewClick, linkTooltipFor, openRelativeMarkdownTarget as openRelativeTarget, openWithSystem as openPathWithSystem } from './utils/previewLinks.js';
-import { canonicalizePath } from './utils/pathIdentity.js';
+import { basename, canonicalizePath, isSameFilePath } from './utils/pathIdentity.js';
 import { ChoiceDialog } from './utils/choiceDialog.svelte.js';
 import { contextMenuFor, editorContextMenuItems, imageMenuItems, saveImageAs as saveImageAsFile } from './utils/viewerContextMenu.js';
 import { seedFindBar } from './utils/findSeed.js';
@@ -127,6 +127,9 @@ import { createWindowSession } from './sessions/windowSession.svelte.js';
 import { reportWindowMeta } from './sessions/windowMeta.svelte.js';
 import { createBoundedWriter, restoreRecords, recoverySnapshot } from './sessions/unsavedRecovery.js';
 import { createDocumentSession, type LoadMarkdownOptions } from './sessions/documentSession.svelte.js';
+import { createOpenFilePicker } from './sessions/openFilePicker.svelte.js';
+import type { ViewerWindowEntry } from './utils/viewerWindows.js';
+import WindowPickerList from './components/WindowPickerList.svelte';
 import { followActiveFile } from './sessions/fileWatch.svelte.js';
 
 	import 'highlight.js/styles/github-dark.css';
@@ -468,6 +471,23 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 		promptModal.resolve?.(value);
 		promptModal.show = false;
 	}
+
+	// How long a window waits for `windows-restored` before asking anyway: a
+	// reopened window that never finishes loading would otherwise hold back
+	// every file opened from outside.
+	const RESTORE_WAIT_MS = 10_000;
+
+	const openFilePicker = createOpenFilePicker({
+		selfLabel: appWindow.label,
+		setting: () => settings.openFileTarget,
+		isOpenHere: (path) => tabManager.tabs.some((tab) => isSameFilePath(tab, { path })),
+		listWindows: () => commands.listViewerWindows() as Promise<ViewerWindowEntry[]>,
+		openHere: (paths) => documentSession.openFiles(paths),
+		sendTo: async (label, paths) => {
+			await emitToWindow(label, 'open-files-here', paths);
+			await commands.focusWindow(label);
+		},
+	});
 
 	function closeModal(choice: 'save' | 'cancel') {
 		modalState.close(choice);
@@ -2132,8 +2152,8 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 			mode,
 			osType: settings.osType,
 			isSplit: !!tabManager.activeTab?.isSplit,
-			overlayOpen: showSettings || modalState.show || promptModal.show || showHome,
-			dialogOpen: modalState.show || promptModal.show,
+			overlayOpen: showSettings || modalState.show || promptModal.show || openFilePicker.state.show || showHome,
+			dialogOpen: modalState.show || promptModal.show || openFilePicker.state.show,
 			isEditing,
 			editorHasFocus: !!editorPaneEl && !!active && editorPaneEl.contains(active),
 		};
@@ -2443,9 +2463,12 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 			);
 			unlisteners.push(
 				await events.filePath(appWindow).listen((event) => {
-					if (event.payload) loadMarkdown(event.payload);
+					if (event.payload) openFilePicker.request(event.payload);
 				}),
 			);
+			// Nothing is asked about until every window of the launch has
+			// restored. See `createOpenFilePicker`.
+			unlisteners.push(await events.windowsRestored(appWindow).listen(() => openFilePicker.markReady()));
 			unlisteners.push(
 				await events.tabTransferOffer(appWindow).listen((event) => {
 					if (windowExit.isCloseWalkActive()) return;
@@ -2494,6 +2517,9 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 				}],
 				['merge-into', (event) => {
 					mergeSelfInto(event.payload).catch((error) => console.error('Failed to merge window', error));
+				}],
+				['open-files-here', async (event) => {
+					for (const path of event.payload) if (typeof path === 'string' && path) await loadMarkdown(path);
 				}],
 				['window-identify', (event) => {
 					identifyFlash = event.payload;
@@ -2571,12 +2597,13 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 			// launch window, so a detached window never re-opens them.
 			try {
 				const args: string[] = await commands.sendMarkdownPath();
-				if (!isDisposed && args?.length > 0) {
-					await documentSession.openFiles(args);
-				}
+				if (!isDisposed) for (const path of args ?? []) openFilePicker.request(path);
 			} catch (error) {
 				console.error('Error receiving Markdown file path:', error);
 			}
+			// A window opened after the launch has restored missed the event.
+			if (await commands.windowsRestored().catch(() => true)) openFilePicker.markReady();
+			else setTimeout(openFilePicker.markReady, RESTORE_WAIT_MS);
 
 			if (!isDisposed) mode = 'app';
 		};
@@ -3127,6 +3154,20 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 		bind:inputValue={promptModal.value}
 		onconfirm={() => closePrompt(promptModal.value)}
 		oncancel={() => closePrompt(null)} />
+
+	<Modal
+		show={openFilePicker.state.show}
+		title={openFilePicker.state.paths.length > 1
+			? t('modal.openFilesInTitle', settings.language).replace('{{count}}', String(openFilePicker.state.paths.length))
+			: t('modal.openFileInTitle', settings.language)}
+		message={openFilePicker.state.paths.map((path) => basename(path) || path).join(', ')}
+		kind="info"
+		confirmLabel={t('modal.openFileInButton', settings.language)}
+		onkeydown={openFilePicker.keydown}
+		onconfirm={() => void openFilePicker.confirm()}
+		oncancel={openFilePicker.cancel}>
+		<WindowPickerList picker={openFilePicker} selfLabel={appWindow.label} />
+	</Modal>
 
 	{#if identifyFlash}
 		<div class="identify-flash" transition:fade={{ duration: 150 }}>

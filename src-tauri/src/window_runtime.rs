@@ -104,6 +104,8 @@ pub struct AppState {
 struct LaunchRouting {
     asked: HashSet<String>,
     routed: HashMap<String, Vec<String>>,
+    /// `windows-restored` has been sent. It is sent once per run.
+    restored: bool,
 }
 
 /// Locks `mutex`, recovering the guarded value if a previous holder panicked.
@@ -199,6 +201,12 @@ pub struct FilePath(pub String);
 /// `file-changed`: the file this window watches changed on disk.
 #[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
 pub struct FileChanged(pub String);
+
+/// `windows-restored`: every window of the launch has finished its restore, so
+/// the window list is complete. Sent once, to every window. See
+/// `announce_restored`.
+#[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct WindowsRestored;
 
 /// `tab-transfer-offer`: another window offers this one a staged tab (its token).
 #[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
@@ -1582,16 +1590,20 @@ pub fn send_markdown_path(
     state: State<'_, AppState>,
 ) -> Vec<String> {
     let label = window.label().to_string();
+    lock_recover(&state.launch_routing)
+        .asked
+        .insert(label.clone());
     if label != LAUNCH_LABEL {
-        let mut routing = lock_recover(&state.launch_routing);
-        routing.asked.insert(label.clone());
-        let files = routing.routed.remove(&label).unwrap_or_default();
-        drop(routing);
+        let files = lock_recover(&state.launch_routing)
+            .routed
+            .remove(&label)
+            .unwrap_or_default();
         if !files.is_empty() {
             if let Some(window) = app.get_webview_window(&label) {
                 bring_to_front(&window);
             }
         }
+        announce_restored(&app, None);
         return files;
     }
     let Some(opened) = lock_recover(&state.startup_files).take() else {
@@ -1617,7 +1629,43 @@ pub fn send_markdown_path(
             bring_to_front(&window);
         }
     }
+    announce_restored(&app, None);
     here
+}
+
+/// Sends `windows-restored` to every window once every open viewer window
+/// has asked `send_markdown_path`, which each does only after its restore and
+/// its first report (`set_window_meta`). Asked on every ask, and when a window
+/// closes, since a window that closes mid-startup never asks. `closing` is
+/// that window, still listed while it is being destroyed.
+fn announce_restored<R: Runtime>(app: &AppHandle<R>, closing: Option<&str>) {
+    let windows = app.webview_windows();
+    let open: Vec<&str> = windows
+        .keys()
+        .map(String::as_str)
+        .filter(|label| is_viewer_label(label) && Some(*label) != closing)
+        .collect();
+    let state = app.state::<AppState>();
+    let mut routing = lock_recover(&state.launch_routing);
+    if routing.restored || !launch_restored(&open, &routing.asked) {
+        return;
+    }
+    routing.restored = true;
+    drop(routing);
+    let _ = WindowsRestored.emit(app);
+}
+
+/// Whether `windows-restored` has been sent, for a window that started after it.
+#[tauri::command]
+#[specta::specta]
+pub fn windows_restored(state: State<'_, AppState>) -> bool {
+    lock_recover(&state.launch_routing).restored
+}
+
+/// Whether the launch window and every other open window have asked for their
+/// launch files.
+fn launch_restored(open: &[&str], asked: &HashSet<String>) -> bool {
+    asked.contains(LAUNCH_LABEL) && open.iter().all(|label| asked.contains(*label))
 }
 
 /// Splits the launch's files into the launch window's own and, per window, the
@@ -1692,6 +1740,7 @@ pub fn handle_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri:
                 .state::<crate::folder::FolderWatcherState>()
                 .forget_window(window.label());
             window.state::<AppState>().window_destroyed(window.label());
+            announce_restored(window.app_handle(), Some(window.label()));
         }
         _ => {}
     }
@@ -2302,6 +2351,31 @@ mod tests {
         assert!(!lock_recover(&state.launch_routing)
             .routed
             .contains_key("window-1"));
+    }
+
+    // #1029: "Ask me" lists the windows only once every reopened window has
+    // restored, or a launch file could be asked about with windows missing.
+    #[test]
+    fn the_launch_is_restored_once_every_open_window_has_asked() {
+        let asked = |labels: &[&str]| {
+            labels
+                .iter()
+                .map(|label| label.to_string())
+                .collect::<HashSet<_>>()
+        };
+        let open = ["main", "window-a", "window-b"];
+        assert!(!launch_restored(&open, &asked(&["main", "window-a"])));
+        assert!(!launch_restored(&open, &asked(&["window-a", "window-b"])));
+        assert!(launch_restored(
+            &open,
+            &asked(&["main", "window-a", "window-b"])
+        ));
+        assert!(launch_restored(&["main"], &asked(&["main"])));
+        // A window that closed without asking is no longer waited for.
+        assert!(launch_restored(
+            &["main", "window-a"],
+            &asked(&["main", "window-a"])
+        ));
     }
 
     #[test]

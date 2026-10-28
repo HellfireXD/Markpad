@@ -17,6 +17,11 @@ import {
 	type OpenFileMode,
 } from '../utils/openFileMode.js';
 import {
+	DEFAULT_OPEN_FILE_TARGET,
+	isOpenFileTarget,
+	type OpenFileTarget,
+} from '../utils/openFileTarget.js';
+import {
 	DEFAULT_TITLEBAR_TOOLBAR_ORDER,
 	DEFAULT_TITLEBAR_TOOLBAR_PLACEMENT,
 	applyTitlebarToolbarMove,
@@ -520,6 +525,8 @@ export class SettingsStore {
 	 */
 	splitScrollSync = $state(false);
 	openFileMode = $state<OpenFileMode>(DEFAULT_OPEN_FILE_MODE);
+	/** Where a file opened from outside goes with several windows open. See `OpenFileTarget`. */
+	openFileTarget = $state<OpenFileTarget>(DEFAULT_OPEN_FILE_TARGET);
 	newFileDefaultMode = $state(true);
 	showRecentFiles = $state(true);
 	/**
@@ -976,6 +983,13 @@ export function createSettingsPersistence(): PersistedSetting<SettingsStore>[] {
 			// the first launch after the upgrade. See `resolveOpenFileMode`.
 			load: (s, raw) => {
 				s.openFileMode = resolveOpenFileMode(raw, readStoredKey(LEGACY_START_IN_EDITOR_KEY));
+			},
+		},
+		{
+			key: 'files.openFileTarget',
+			read: (s) => s.openFileTarget,
+			load: (s, raw) => {
+				if (isOpenFileTarget(raw)) s.openFileTarget = raw;
 			},
 		},
 		booleanSetting('editor.newFileDefaultMode', (s) => s.newFileDefaultMode, (s, v) => { s.newFileDefaultMode = v; }),

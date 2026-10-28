@@ -1029,6 +1029,19 @@ describe('settings persistence', async () => {
 		}
 	});
 
+	// #1029: where a file opened from outside goes when several windows are open.
+	test('the external-file target survives a restart and offers exactly the values the store accepts', async () => {
+		const { OPEN_FILE_TARGET_OPTIONS, isOpenFileTarget } = await import('../src/lib/utils/openFileTarget.js');
+		resetStorage();
+		assert.equal(createStore().openFileTarget, 'lastWindow');
+		resetStorage({ 'files.openFileTarget': 'ask' });
+		assert.equal(createStore().openFileTarget, 'ask');
+		resetStorage({ 'files.openFileTarget': 'nextWindow' });
+		assert.equal(createStore().openFileTarget, 'lastWindow');
+		assert.deepEqual(OPEN_FILE_TARGET_OPTIONS.map((option) => option.value), ['lastWindow', 'ask']);
+		assert.ok(OPEN_FILE_TARGET_OPTIONS.every((option) => isOpenFileTarget(option.value)));
+	});
+
 	test('the setting is one control, defaulting to preview', async () => {
 		const { OPEN_FILE_MODE_OPTIONS, isOpenFileMode } = await import('../src/lib/utils/openFileMode.js');
 		resetStorage();

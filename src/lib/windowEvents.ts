@@ -17,6 +17,8 @@ export type WindowEvents = {
 	'menu-tab-move': { tabId: string; targetLabel: string };
 	'merge-into': string;
 	'window-identify': string;
+	/** The answer to another window's open-file picker: open these here, without asking. */
+	'open-files-here': string[];
 };
 
 export type WindowEventName = keyof WindowEvents;

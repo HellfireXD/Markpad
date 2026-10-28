@@ -11,6 +11,7 @@ import {
 	type SettingsStore,
 } from '../stores/settings.svelte.js';
 import { OPEN_FILE_MODE_OPTIONS } from './openFileMode.js';
+import { OPEN_FILE_TARGET_OPTIONS } from './openFileTarget.js';
 import type { TranslationKey } from './i18n.js';
 import {
 	DEFAULT_PREVIEW_MAX_WIDTH,
@@ -29,7 +30,7 @@ import {
 type BooleanKey = { [K in keyof SettingsStore]: SettingsStore[K] extends boolean ? K : never }[keyof SettingsStore];
 type NumberKey = 'editorFontSize' | 'editorMaxWidth' | 'previewFontSize' | 'codeFontSize';
 type FontKey = 'editorFont' | 'previewFont' | 'codeFont';
-type SelectKey = 'wordWrap' | 'tabPosition' | 'folderSide' | 'sidebarStackOrder' | 'tocFollows' | 'openFileMode';
+type SelectKey = 'wordWrap' | 'tabPosition' | 'folderSide' | 'sidebarStackOrder' | 'tocFollows' | 'openFileMode' | 'openFileTarget';
 
 type RowBase = {
 	id: string;
@@ -224,6 +225,7 @@ export const SETTINGS_PANES: Record<'editor' | 'preview' | 'appearance' | 'files
 	files: {
 		rows: [
 			{ kind: 'select', id: 'files-open-file-mode', labelKey: 'settings.openFileMode', key: 'openFileMode', options: OPEN_FILE_MODE_OPTIONS },
+			{ kind: 'select', id: 'files-open-file-target', labelKey: 'settings.openFileTarget', titleKey: 'settings.openFileTargetHint', key: 'openFileTarget', options: OPEN_FILE_TARGET_OPTIONS },
 			{ kind: 'toggle', id: 'files-new-file-mode', labelKey: 'settings.newFileDefaultMode', key: 'newFileDefaultMode' },
 			{ kind: 'toggle', id: 'files-links-new-tab', labelKey: 'settings.linksOpenInNewTab', key: 'linksOpenInNewTab' },
 			{ kind: 'toggle', id: 'files-recent-files', labelKey: 'settings.showRecentFiles', key: 'showRecentFiles' },
