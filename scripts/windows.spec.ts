@@ -1357,6 +1357,7 @@ describe('a file opened from outside asks which window it goes to', () => {
 	} = {}) {
 		const opened: string[][] = [];
 		const sent: Array<{ label: string; paths: string[] }> = [];
+		const held: boolean[] = [];
 		let windows = options.windows ?? [SELF, OTHER];
 		const deps: OpenFilePickerDeps = {
 			selfLabel: SELF.label,
@@ -1370,6 +1371,9 @@ describe('a file opened from outside asks which window it goes to', () => {
 			sendTo: async (label, paths) => {
 				sent.push({ label, paths });
 			},
+			holdFront: async (value) => {
+				held.push(value);
+			},
 			batchMs: BATCH_MS,
 		};
 		const picker = createOpenFilePicker(deps);
@@ -1378,6 +1382,7 @@ describe('a file opened from outside asks which window it goes to', () => {
 			picker,
 			opened,
 			sent,
+			held,
 			closeWindow: (label: string) => {
 				windows = windows.filter((window) => window.label !== label);
 			},
@@ -1444,6 +1449,30 @@ describe('a file opened from outside asks which window it goes to', () => {
 		picker.request('/notes/b.md');
 		await wait(40);
 		assert.deepEqual(opened, [['/notes/a.md'], ['/notes/b.md']]);
+	});
+
+	// At launch the reopened windows come up over the launch window, which
+	// is the one asking, and a picker behind them was cancelled by the click
+	// that brought it forward.
+	test('this window is held in front of the others until the question is answered', async () => {
+		const answered = setup();
+		answered.picker.request('/notes/a.md');
+		await wait();
+		assert.deepEqual(answered.held, [true]);
+		await answered.picker.confirm();
+		assert.deepEqual(answered.held, [true, false]);
+
+		const cancelled = setup();
+		cancelled.picker.request('/notes/a.md');
+		await wait();
+		cancelled.picker.cancel();
+		cancelled.picker.cancel();
+		assert.deepEqual(cancelled.held, [true, false]);
+
+		const loading = setup({ setting: 'lastWindow' });
+		loading.picker.request('/notes/a.md');
+		await wait();
+		assert.deepEqual(loading.held, [], 'loading a file without asking holds nothing');
 	});
 
 	test('with several windows it asks, offering this window first', async () => {

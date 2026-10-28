@@ -40,6 +40,13 @@ export interface OpenFilePickerDeps {
 	openHere: (paths: string[]) => Promise<void>;
 	/** Hand the files to another window and bring it to the front. */
 	sendTo: (label: string, paths: string[]) => Promise<void>;
+	/**
+	 * Keep this window in front of the other Markpad windows while the
+	 * question is on screen (`true`), or let it go (`false`). At launch the
+	 * reopened windows come up over the launch window after Rust delivered to
+	 * it, and the picker would open hidden behind them.
+	 */
+	holdFront: (held: boolean) => Promise<void>;
 	batchMs?: number;
 }
 
@@ -115,10 +122,12 @@ export function createOpenFilePicker(deps: OpenFilePickerDeps) {
 		state.paths = paths;
 		state.selected = Math.max(self, 0);
 		state.show = true;
+		await deps.holdFront(true).catch(() => {});
 	}
 
 	function close(): string[] {
 		const paths = state.paths;
+		if (state.show) void deps.holdFront(false).catch(() => {});
 		state.show = false;
 		state.paths = [];
 		state.windows = [];

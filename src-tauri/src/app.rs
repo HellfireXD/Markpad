@@ -146,6 +146,7 @@ fn bindings_builder() -> tauri_specta::Builder<tauri::Wry> {
             window_runtime::set_window_meta,
             window_runtime::set_window_files,
             window_runtime::windows_restored,
+            window_runtime::hold_front,
             window_runtime::list_viewer_windows,
             window_runtime::is_window_tag_taken,
             window_runtime::offer_tab_to_window,

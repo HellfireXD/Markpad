@@ -487,6 +487,7 @@ import { followActiveFile } from './sessions/fileWatch.svelte.js';
 			await emitToWindow(label, 'open-files-here', paths);
 			await commands.focusWindow(label);
 		},
+		holdFront: (held) => commands.holdFront(held),
 	});
 
 	function closeModal(choice: 'save' | 'cancel') {

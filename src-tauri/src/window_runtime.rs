@@ -94,6 +94,9 @@ pub struct AppState {
     open_files: Mutex<HashMap<String, Vec<String>>>,
     /// Launch files routed to the window that already has them open.
     launch_routing: Mutex<LaunchRouting>,
+    /// The window whose open-file picker is on screen (#1029). It is kept in
+    /// front of the other viewer windows until it answers. See `hold_front`.
+    asking: Mutex<Option<String>>,
 }
 
 /// Launch files that belong to a window other than the launch window, because
@@ -139,6 +142,7 @@ impl AppState {
             claimed_recovery: Mutex::new(HashSet::new()),
             open_files: Mutex::new(HashMap::new()),
             launch_routing: Mutex::new(LaunchRouting::default()),
+            asking: Mutex::new(None),
         }
     }
 
@@ -188,6 +192,7 @@ impl AppState {
         routing.asked.remove(label);
         routing.routed.remove(label);
         drop(routing);
+        release_front(&mut lock_recover(&self.asking), label);
         if let Some(closed) = lock_recover(&self.quit).as_mut() {
             closed.push(label.to_string());
         };
@@ -1655,6 +1660,43 @@ fn announce_restored<R: Runtime>(app: &AppHandle<R>, closing: Option<&str>) {
     let _ = WindowsRestored.emit(app);
 }
 
+/// Holds this window in front of the other viewer windows while its open-file
+/// picker is on screen (`held`), or lets it go. A viewer window focused
+/// meanwhile hands the focus straight back, as an app-modal dialog's owner
+/// does, so the picker cannot end up behind another Markpad window. Other
+/// apps are not affected.
+#[tauri::command]
+#[specta::specta]
+pub fn hold_front(window: tauri::Window, state: State<'_, AppState>, held: bool) {
+    let label = window.label().to_string();
+    if !is_viewer_label(&label) {
+        return;
+    }
+    let mut asking = lock_recover(&state.asking);
+    if !held {
+        release_front(&mut asking, &label);
+        return;
+    }
+    *asking = Some(label.clone());
+    drop(asking);
+    if let Some(window) = window.app_handle().get_webview_window(&label) {
+        bring_to_front(&window);
+    }
+}
+
+/// Lets go of `label`, if it is the window being held in front.
+fn release_front(asking: &mut Option<String>, label: &str) {
+    if asking.as_deref() == Some(label) {
+        *asking = None;
+    }
+}
+
+/// The window to bring back to the front when `focused` gains focus: the one
+/// asking, unless that is `focused` itself.
+fn front_instead<'a>(asking: Option<&'a str>, focused: &str) -> Option<&'a str> {
+    asking.filter(|asking| *asking != focused)
+}
+
 /// Whether `windows-restored` has been sent, for a window that started after it.
 #[tauri::command]
 #[specta::specta]
@@ -1732,6 +1774,12 @@ pub fn handle_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri:
             if is_viewer_label(label) {
                 let state = window.state::<AppState>();
                 *lock_recover(&state.last_focused_viewer) = Some(label.to_string());
+                let asking = lock_recover(&state.asking).clone();
+                if let Some(asking) = front_instead(asking.as_deref(), label) {
+                    if let Some(asking) = window.app_handle().get_webview_window(asking) {
+                        bring_to_front(&asking);
+                    }
+                }
             }
         }
         tauri::WindowEvent::Destroyed => {
@@ -2376,6 +2424,33 @@ mod tests {
             &["main", "window-a"],
             &asked(&["main", "window-a"])
         ));
+    }
+
+    // #1029: the open-file picker stays in front of the other Markpad windows
+    // until it is answered.
+    #[test]
+    fn another_window_focused_while_one_asks_hands_the_focus_back() {
+        assert_eq!(front_instead(Some("window-a"), "main"), Some("window-a"));
+        assert_eq!(front_instead(Some("window-a"), "window-a"), None);
+        assert_eq!(front_instead(None, "main"), None);
+
+        let mut asking = Some("window-a".to_string());
+        release_front(&mut asking, "window-b");
+        assert_eq!(
+            asking.as_deref(),
+            Some("window-a"),
+            "only the asking window lets go"
+        );
+        release_front(&mut asking, "window-a");
+        assert_eq!(asking, None);
+    }
+
+    #[test]
+    fn a_closed_window_that_was_asking_is_no_longer_held_in_front() {
+        let state = AppState::new();
+        *lock_recover(&state.asking) = Some("window-1".to_string());
+        state.window_destroyed("window-1");
+        assert_eq!(*lock_recover(&state.asking), None);
     }
 
     #[test]
