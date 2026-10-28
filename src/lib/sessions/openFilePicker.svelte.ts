@@ -82,16 +82,11 @@ export function createOpenFilePicker(deps: OpenFilePickerDeps) {
 			void openHere([path]);
 			return;
 		}
-		if (!ready) {
-			if (!waiting.includes(path)) waiting.push(path);
-			return;
-		}
-		if (state.show) {
-			if (!state.paths.includes(path)) state.paths.push(path);
-			return;
-		}
-		if (collecting) {
-			if (!collecting.includes(path)) collecting.push(path);
+		// Joins the files waiting for `markReady`, the question on screen, or
+		// the batch being collected, in that order. Otherwise it starts a batch.
+		const joining = !ready ? waiting : state.show ? state.paths : collecting;
+		if (joining) {
+			if (!joining.includes(path)) joining.push(path);
 			return;
 		}
 		collecting = [path];
@@ -144,14 +139,11 @@ export function createOpenFilePicker(deps: OpenFilePickerDeps) {
 		if (!state.show) return;
 		const target = state.windows[state.selected];
 		const paths = close();
-		if (!target || target.label === deps.selfLabel) {
-			await openHere(paths);
-			return;
-		}
-		const stillOpen = (await deps.listWindows().catch(() => [] as ViewerWindowEntry[])).some(
-			(window) => window.label === target.label,
-		);
-		if (!stillOpen) {
+		const elsewhere =
+			target &&
+			target.label !== deps.selfLabel &&
+			(await deps.listWindows().catch(() => [] as ViewerWindowEntry[])).some((window) => window.label === target.label);
+		if (!elsewhere) {
 			await openHere(paths);
 			return;
 		}
