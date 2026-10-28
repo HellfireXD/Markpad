@@ -1,6 +1,6 @@
 use crate::fs_safety::atomic_write;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -87,6 +87,23 @@ pub struct AppState {
     reopened: AtomicBool,
     /// Orphan backups already handed to a window this launch.
     claimed_recovery: Mutex<HashSet<String>>,
+    /// The files each window has open, as it last reported them
+    /// (`set_window_files`): a tab's `pathKey`, or its path while it has none.
+    /// A window has no entry until its restore has finished; `file_holder`
+    /// answers from its snapshot until then.
+    open_files: Mutex<HashMap<String, Vec<String>>>,
+    /// Launch files routed to the window that already has them open.
+    launch_routing: Mutex<LaunchRouting>,
+}
+
+/// Launch files that belong to a window other than the launch window, because
+/// that window is restoring a tab on them. A window takes its share when it
+/// asks `send_markdown_path`; one that asked before the launch window handed
+/// the files out is sent them as `file-path` instead.
+#[derive(Default)]
+struct LaunchRouting {
+    asked: HashSet<String>,
+    routed: HashMap<String, Vec<String>>,
 }
 
 /// Locks `mutex`, recovering the guarded value if a previous holder panicked.
@@ -118,6 +135,8 @@ impl AppState {
             quit: Mutex::new(None),
             reopened: AtomicBool::new(false),
             claimed_recovery: Mutex::new(HashSet::new()),
+            open_files: Mutex::new(HashMap::new()),
+            launch_routing: Mutex::new(LaunchRouting::default()),
         }
     }
 
@@ -162,6 +181,11 @@ impl AppState {
     /// remembers that it closed it.
     fn window_destroyed(&self, label: &str) {
         lock_recover(&self.window_registry).remove(label);
+        lock_recover(&self.open_files).remove(label);
+        let mut routing = lock_recover(&self.launch_routing);
+        routing.asked.remove(label);
+        routing.routed.remove(label);
+        drop(routing);
         if let Some(closed) = lock_recover(&self.quit).as_mut() {
             closed.push(label.to_string());
         };
@@ -421,6 +445,108 @@ pub fn set_window_meta(
         return;
     }
     state.record_window_meta(label, tag_name, tag_color, active_tab_title, tab_count);
+}
+
+/// A viewer window's report of the files it has open, sent once its restore
+/// has finished and again whenever its tabs change. See `file_holder`.
+#[tauri::command]
+#[specta::specta]
+pub fn set_window_files(window: tauri::Window, state: State<'_, AppState>, files: Vec<String>) {
+    let label = window.label().to_string();
+    if !is_viewer_label(&label) {
+        return;
+    }
+    lock_recover(&state.open_files).insert(label, files);
+}
+
+/// The identity a file is compared by: the filesystem's answer, as the
+/// frontend's `pathKey` is (`canonicalize_path`), or the path itself when it
+/// has none.
+fn file_key(path: &str) -> String {
+    crate::fs_safety::canonical_identity(Path::new(path))
+        .map(|resolved| resolved.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string())
+}
+
+/// The files a window's snapshot will restore: every `tabs[].path` of the JSON
+/// `TabManager.serializeState` writes. Anything unreadable names no files.
+fn snapshot_paths(json: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|data| data.get("tabs")?.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|tab| tab.get("path")?.as_str().map(str::to_string))
+        .collect()
+}
+
+/// The window that has `path` open.
+///
+/// `held` is each window's files, compared both ways a window can know a file:
+/// by identity (`key`, which folds case, separators and symlinks the way the
+/// volume does) and by the path as it was typed, for a tab whose identity was
+/// never resolved. The first match in `held` wins; the caller orders it.
+fn file_holder<'a>(held: &'a [(String, Vec<String>)], path: &str, key: &str) -> Option<&'a str> {
+    held.iter()
+        .find(|(_, files)| files.iter().any(|file| file == key || file == path))
+        .map(|(label, _)| label.as_str())
+}
+
+/// The identities of the files `label`'s snapshot will restore.
+fn snapshot_keys(config: &Path, label: &str) -> Vec<String> {
+    load_window_state_in(config, label)
+        .map(|json| {
+            snapshot_paths(&json)
+                .iter()
+                .map(|path| file_key(path))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every open viewer window's files, for `file_holder`: what it reported, or,
+/// before its first report, the identities of the files its snapshot is
+/// restoring. Sorted by label, so the launch window comes first.
+fn held_files<R: Runtime>(app: &AppHandle<R>) -> Vec<(String, Vec<String>)> {
+    let mut labels: Vec<String> = app
+        .webview_windows()
+        .into_keys()
+        .filter(|label| is_viewer_label(label))
+        .collect();
+    labels.sort();
+    let reported = lock_recover(&app.state::<AppState>().open_files).clone();
+    let config = app.path().app_config_dir().ok();
+    labels
+        .into_iter()
+        .map(|label| {
+            let files = match (reported.get(&label), config.as_deref()) {
+                (Some(files), _) => files.clone(),
+                (None, Some(config)) => snapshot_keys(config, &label),
+                (None, None) => Vec::new(),
+            };
+            (label, files)
+        })
+        .collect()
+}
+
+/// Whether a window this launch reopens (#990) is restoring a tab on `path`,
+/// read from the snapshots on disk. True before any of those windows exist —
+/// at setup, and while the launch's files are still being queued — which is
+/// when the launch window would otherwise be sent the file as `file-path` and
+/// open a second copy of it. `send_markdown_path` delivers it either way.
+fn snapshot_restores(config: &Path, path: &str, key: &str) -> bool {
+    remembered_window_labels_in(config).iter().any(|label| {
+        snapshot_keys(config, label)
+            .iter()
+            .any(|restored| restored == key || restored == path)
+    })
+}
+
+/// `snapshot_restores` for the running app.
+pub fn reopened_window_restores<R: Runtime>(app: &AppHandle<R>, path: &str) -> bool {
+    app.path()
+        .app_config_dir()
+        .is_ok_and(|config| snapshot_restores(&config, path, &file_key(path)))
 }
 
 /// Whether a window other than `label` currently carries `name` as its tag.
@@ -1126,16 +1252,31 @@ fn merge_startup_files(opened: Vec<String>, mut files: Vec<String>) -> Vec<Strin
 }
 
 /// A file opened by the OS. Until the launch window has taken the launch's files it
-/// joins them, so it lands there and in no other window; after that it goes
-/// where `pick_delivery_window` says.
+/// joins them, so it lands there and in no other window; `send_markdown_path`
+/// routes them from there. After that it goes to the window that already has
+/// it open, and only otherwise where `pick_delivery_window` says.
+///
+/// One tab per file is the rule inside a window (`TabManager.claimPath`), and
+/// it only ever saw that window's tabs: a file open in one window, opened
+/// again from Explorer while another was focused, became a second tab there —
+/// two buffers and two auto-save timers on one file (#1029).
 pub fn deliver_opened_path<R: Runtime>(app: &AppHandle<R>, path: String) {
     let state = app.state::<AppState>();
-    let target = {
-        let mut pending = lock_recover(&state.startup_files);
-        if queue_startup_file(&mut pending, &path) {
-            app.get_webview_window(LAUNCH_LABEL)
-        } else {
-            pick_delivery_window(app)
+    let queued = queue_startup_file(&mut lock_recover(&state.startup_files), &path);
+    let target = if queued {
+        // Queued for `send_markdown_path`, which routes it. The direct send to
+        // the launch window is a second channel (#547), and for a file a
+        // reopened window is restoring it would be a second copy.
+        if reopened_window_restores(app, &path) {
+            return;
+        }
+        app.get_webview_window(LAUNCH_LABEL)
+    } else {
+        {
+            let held = held_files(app);
+            file_holder(&held, &path, &file_key(&path))
+                .and_then(|label| app.get_webview_window(label))
+                .or_else(|| pick_delivery_window(app))
         }
     };
     if let Some(window) = target {
@@ -1427,18 +1568,75 @@ pub fn unwatch_file(window: tauri::Window, state: State<'_, WatcherState>) -> Re
 /// The launch's files, handed once to the launch window. Every window asks;
 /// the others, and any later ask, get nothing, so a new window never reopens
 /// the files the app was started with.
+///
+/// Except the ones a reopened window (#990) is restoring a tab on: those go to
+/// that window instead of becoming a second copy in the launch window (#1001
+/// sends every launch file here). The other windows may not have restored, or
+/// even started, yet, so `held_files` reads their snapshots. A window that
+/// asks later takes its share here; one that already asked is sent it.
 #[tauri::command]
 #[specta::specta]
-pub fn send_markdown_path(window: tauri::Window, state: State<'_, AppState>) -> Vec<String> {
-    if window.label() != LAUNCH_LABEL {
-        return Vec::new();
+pub fn send_markdown_path(
+    window: tauri::Window,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Vec<String> {
+    let label = window.label().to_string();
+    if label != LAUNCH_LABEL {
+        let mut routing = lock_recover(&state.launch_routing);
+        routing.asked.insert(label.clone());
+        let files = routing.routed.remove(&label).unwrap_or_default();
+        drop(routing);
+        if !files.is_empty() {
+            if let Some(window) = app.get_webview_window(&label) {
+                bring_to_front(&window);
+            }
+        }
+        return files;
     }
     let Some(opened) = lock_recover(&state.startup_files).take() else {
         return Vec::new();
     };
     let args: Vec<String> = std::env::args().collect();
     let files = startup_paths(&args, &std::env::current_dir().unwrap_or_default());
-    merge_startup_files(opened, files)
+    let files = merge_startup_files(opened, files);
+
+    let held = held_files(&app);
+    let (here, elsewhere) = route_launch_files(&held, files, file_key);
+    for (holder, paths) in elsewhere {
+        let mut routing = lock_recover(&state.launch_routing);
+        if !routing.asked.contains(&holder) {
+            routing.routed.entry(holder).or_default().extend(paths);
+            continue;
+        }
+        drop(routing);
+        if let Some(window) = app.get_webview_window(&holder) {
+            for path in paths {
+                let _ = FilePath(path).emit_to(&app, &holder);
+            }
+            bring_to_front(&window);
+        }
+    }
+    here
+}
+
+/// Splits the launch's files into the launch window's own and, per window, the
+/// ones another window already has open. A file the launch window has open
+/// itself stays with it (`held` lists it first). Order is kept within each part.
+fn route_launch_files(
+    held: &[(String, Vec<String>)],
+    files: Vec<String>,
+    key: impl Fn(&str) -> String,
+) -> (Vec<String>, BTreeMap<String, Vec<String>>) {
+    let mut here = Vec::new();
+    let mut elsewhere: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in files {
+        match file_holder(held, &path, &key(&path)) {
+            None | Some(LAUNCH_LABEL) => here.push(path),
+            Some(holder) => elsewhere.entry(holder.to_string()).or_default().push(path),
+        }
+    }
+    (here, elsewhere)
 }
 
 /// What the window-state plugin keeps for every window.
@@ -1967,6 +2165,143 @@ mod tests {
             Some("a")
         );
         fs::remove_dir_all(config).unwrap();
+    }
+
+    fn held(entries: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
+        entries
+            .iter()
+            .map(|(label, files)| {
+                (
+                    label.to_string(),
+                    files.iter().map(|f| f.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_file_already_open_belongs_to_the_window_that_has_it() {
+        let held = held(&[
+            ("main", &["/n/a.md"]),
+            ("window-1", &["/n/b.md", "/n/c.md"]),
+        ]);
+        assert_eq!(file_holder(&held, "/n/c.md", "/n/c.md"), Some("window-1"));
+        assert_eq!(file_holder(&held, "/n/a.md", "/n/a.md"), Some("main"));
+        assert_eq!(file_holder(&held, "/n/new.md", "/n/new.md"), None);
+        // The receiving window itself is not "another window that has it".
+    }
+
+    #[test]
+    fn a_holder_is_found_by_identity_or_by_the_path_it_typed() {
+        // A tab with a resolved `pathKey` reports the canonical form; one
+        // without reports the path as typed. Either matches.
+        let held = held(&[
+            ("window-1", &["C:\\Notes\\A.md"]),
+            ("window-2", &["/typed/b.md"]),
+        ]);
+        assert_eq!(
+            file_holder(&held, "c:/notes/a.md", "C:\\Notes\\A.md"),
+            Some("window-1")
+        );
+        assert_eq!(
+            file_holder(&held, "/typed/b.md", "/real/b.md"),
+            Some("window-2")
+        );
+    }
+
+    #[test]
+    fn a_snapshot_names_the_files_its_window_will_restore() {
+        let json = r#"{"version":2,"activeTabId":"x","tabs":[{"id":"x","path":"/n/a.md"},{"id":"y","path":"/n/b.md"}]}"#;
+        assert_eq!(snapshot_paths(json), vec!["/n/a.md", "/n/b.md"]);
+        for unreadable in [
+            "",
+            "not json",
+            "{}",
+            r#"{"tabs":"no"}"#,
+            r#"{"tabs":[{"title":"no path"}]}"#,
+        ] {
+            assert!(snapshot_paths(unreadable).is_empty(), "{unreadable:?}");
+        }
+    }
+
+    #[test]
+    fn launch_files_another_window_restores_are_routed_to_it() {
+        let held = held(&[
+            ("main", &["/n/main.md"]),
+            ("window-1", &["/n/a.md", "/n/b.md"]),
+            ("window-2", &["/n/c.md"]),
+        ]);
+        let files = ["/n/a.md", "/n/new.md", "/n/c.md", "/n/main.md", "/n/b.md"]
+            .map(String::from)
+            .to_vec();
+        let (here, elsewhere) = route_launch_files(&held, files, |path| path.to_string());
+        // Files open nowhere, and ones the launch window has itself, stay.
+        assert_eq!(here, vec!["/n/new.md", "/n/main.md"]);
+        assert_eq!(
+            elsewhere,
+            BTreeMap::from([
+                (
+                    "window-1".to_string(),
+                    vec!["/n/a.md".to_string(), "/n/b.md".to_string()]
+                ),
+                ("window-2".to_string(), vec!["/n/c.md".to_string()]),
+            ])
+        );
+    }
+
+    #[test]
+    fn the_launch_window_keeps_a_file_it_shares_with_another_window() {
+        // Two windows on one file is the duplicate this fixes, but a session
+        // saved by an older build can still hold one. The launch window lists
+        // first, so the file stays where the files are being opened anyway.
+        let held = held(&[("main", &["/n/a.md"]), ("window-1", &["/n/a.md"])]);
+        let (here, elsewhere) =
+            route_launch_files(&held, vec!["/n/a.md".to_string()], |p| p.to_string());
+        assert_eq!(here, vec!["/n/a.md"]);
+        assert!(elsewhere.is_empty());
+    }
+
+    #[test]
+    fn a_launch_file_a_reopened_window_restores_is_not_sent_to_the_launch_window() {
+        let config = temp_dir("restores");
+        // The pinned window from the report: its label, its three files.
+        save_window_state_in(
+            &config,
+            "window-pinned-54657374205461672031-1",
+            r#"{"tabs":[{"path":"/t/Test_file_1.md"},{"path":"/t/Test_file_2.md"}]}"#,
+        )
+        .unwrap();
+        // The launch window's own snapshot names a file too, but its own tabs
+        // are not "another window's"; it is not one the launch reopens.
+        save_window_state_in(&config, "main", r#"{"tabs":[{"path":"/t/main.md"}]}"#).unwrap();
+
+        assert!(snapshot_restores(
+            &config,
+            "/t/Test_file_2.md",
+            "/t/Test_file_2.md"
+        ));
+        assert!(!snapshot_restores(&config, "/t/main.md", "/t/main.md"));
+        assert!(!snapshot_restores(&config, "/t/new.md", "/t/new.md"));
+        // No session at all: nothing is held, so nothing changes.
+        assert!(!snapshot_restores(
+            &temp_dir("restores-empty"),
+            "/t/a.md",
+            "/t/a.md"
+        ));
+    }
+
+    #[test]
+    fn a_closed_window_stops_holding_its_files() {
+        let state = AppState::new();
+        lock_recover(&state.open_files).insert("window-1".to_string(), vec!["/n/a.md".to_string()]);
+        lock_recover(&state.launch_routing)
+            .routed
+            .insert("window-1".to_string(), vec!["/n/b.md".to_string()]);
+        state.window_destroyed("window-1");
+        assert!(!lock_recover(&state.open_files).contains_key("window-1"));
+        assert!(!lock_recover(&state.launch_routing)
+            .routed
+            .contains_key("window-1"));
     }
 
     #[test]
