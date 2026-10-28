@@ -255,14 +255,6 @@ export const commands = {
 	setWindowFiles: (files: string[]) => __TAURI_INVOKE<void>("set_window_files", { files }),
 	/**  Whether `windows-restored` has been sent, for a window that started after it. */
 	windowsRestored: () => __TAURI_INVOKE<boolean>("windows_restored"),
-	/**
-	 *  Holds this window in front of the other viewer windows while its open-file
-	 *  picker is on screen (`held`), or lets it go. A viewer window focused
-	 *  meanwhile hands the focus straight back, as an app-modal dialog's owner
-	 *  does, so the picker cannot end up behind another Markpad window. Other
-	 *  apps are not affected.
-	 */
-	holdFront: (held: boolean) => __TAURI_INVOKE<void>("hold_front", { held }),
 	listViewerWindows: () => __TAURI_INVOKE<WindowListEntry[]>("list_viewer_windows"),
 	isWindowTagTaken: (name: string) => __TAURI_INVOKE<boolean>("is_window_tag_taken", { name }),
 	offerTabToWindow: (targetLabel: string, token: string) => __TAURI_INVOKE<null>("offer_tab_to_window", { targetLabel, token }),
