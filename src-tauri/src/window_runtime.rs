@@ -1,6 +1,6 @@
 use crate::fs_safety::atomic_write;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -480,22 +480,28 @@ fn snapshot_paths(json: &str) -> Vec<String> {
         .collect()
 }
 
-/// The window, other than `except`, that has `path` open.
+/// The window that has `path` open.
 ///
 /// `held` is each window's files, compared both ways a window can know a file:
 /// by identity (`key`, which folds case, separators and symlinks the way the
 /// volume does) and by the path as it was typed, for a tab whose identity was
 /// never resolved. The first match in `held` wins; the caller orders it.
-fn file_holder<'a>(
-    held: &'a [(String, Vec<String>)],
-    path: &str,
-    key: &str,
-    except: Option<&str>,
-) -> Option<&'a str> {
+fn file_holder<'a>(held: &'a [(String, Vec<String>)], path: &str, key: &str) -> Option<&'a str> {
     held.iter()
-        .filter(|(label, _)| Some(label.as_str()) != except)
         .find(|(_, files)| files.iter().any(|file| file == key || file == path))
         .map(|(label, _)| label.as_str())
+}
+
+/// The identities of the files `label`'s snapshot will restore.
+fn snapshot_keys(config: &Path, label: &str) -> Vec<String> {
+    load_window_state_in(config, label)
+        .map(|json| {
+            snapshot_paths(&json)
+                .iter()
+                .map(|path| file_key(path))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Every open viewer window's files, for `file_holder`: what it reported, or,
@@ -513,18 +519,10 @@ fn held_files<R: Runtime>(app: &AppHandle<R>) -> Vec<(String, Vec<String>)> {
     labels
         .into_iter()
         .map(|label| {
-            let files = match reported.get(&label) {
-                Some(files) => files.clone(),
-                None => config
-                    .as_deref()
-                    .and_then(|config| load_window_state_in(config, &label))
-                    .map(|json| {
-                        snapshot_paths(&json)
-                            .iter()
-                            .map(|path| file_key(path))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+            let files = match (reported.get(&label), config.as_deref()) {
+                (Some(files), _) => files.clone(),
+                (None, Some(config)) => snapshot_keys(config, &label),
+                (None, None) => Vec::new(),
             };
             (label, files)
         })
@@ -538,11 +536,9 @@ fn held_files<R: Runtime>(app: &AppHandle<R>) -> Vec<(String, Vec<String>)> {
 /// open a second copy of it. `send_markdown_path` delivers it either way.
 fn snapshot_restores(config: &Path, path: &str, key: &str) -> bool {
     remembered_window_labels_in(config).iter().any(|label| {
-        load_window_state_in(config, label).is_some_and(|json| {
-            snapshot_paths(&json)
-                .iter()
-                .any(|restored| restored == path || file_key(restored) == key)
-        })
+        snapshot_keys(config, label)
+            .iter()
+            .any(|restored| restored == key || restored == path)
     })
 }
 
@@ -551,18 +547,6 @@ pub fn reopened_window_restores<R: Runtime>(app: &AppHandle<R>, path: &str) -> b
     app.path()
         .app_config_dir()
         .is_ok_and(|config| snapshot_restores(&config, path, &file_key(path)))
-}
-
-/// The open window that already has `path` open, if any — the window a file
-/// opened from outside belongs in, whichever one is focused.
-fn holder_window<R: Runtime>(
-    app: &AppHandle<R>,
-    path: &str,
-    except: Option<&str>,
-) -> Option<tauri::WebviewWindow<R>> {
-    let held = held_files(app);
-    let label = file_holder(&held, path, &file_key(path), except)?;
-    app.get_webview_window(label)
 }
 
 /// Whether a window other than `label` currently carries `name` as its tag.
@@ -1288,7 +1272,12 @@ pub fn deliver_opened_path<R: Runtime>(app: &AppHandle<R>, path: String) {
         }
         app.get_webview_window(LAUNCH_LABEL)
     } else {
-        holder_window(app, &path, None).or_else(|| pick_delivery_window(app))
+        {
+            let held = held_files(app);
+            file_holder(&held, &path, &file_key(&path))
+                .and_then(|label| app.get_webview_window(label))
+                .or_else(|| pick_delivery_window(app))
+        }
     };
     if let Some(window) = target {
         let _ = FilePath(path).emit_to(app, window.label());
@@ -1638,16 +1627,13 @@ fn route_launch_files(
     held: &[(String, Vec<String>)],
     files: Vec<String>,
     key: impl Fn(&str) -> String,
-) -> (Vec<String>, Vec<(String, Vec<String>)>) {
+) -> (Vec<String>, BTreeMap<String, Vec<String>>) {
     let mut here = Vec::new();
-    let mut elsewhere: Vec<(String, Vec<String>)> = Vec::new();
+    let mut elsewhere: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for path in files {
-        match file_holder(held, &path, &key(&path), None) {
+        match file_holder(held, &path, &key(&path)) {
             None | Some(LAUNCH_LABEL) => here.push(path),
-            Some(holder) => match elsewhere.iter_mut().find(|(label, _)| label == holder) {
-                Some((_, paths)) => paths.push(path),
-                None => elsewhere.push((holder.to_string(), vec![path])),
-            },
+            Some(holder) => elsewhere.entry(holder.to_string()).or_default().push(path),
         }
     }
     (here, elsewhere)
@@ -2199,14 +2185,10 @@ mod tests {
             ("main", &["/n/a.md"]),
             ("window-1", &["/n/b.md", "/n/c.md"]),
         ]);
-        assert_eq!(
-            file_holder(&held, "/n/c.md", "/n/c.md", None),
-            Some("window-1")
-        );
-        assert_eq!(file_holder(&held, "/n/a.md", "/n/a.md", None), Some("main"));
-        assert_eq!(file_holder(&held, "/n/new.md", "/n/new.md", None), None);
+        assert_eq!(file_holder(&held, "/n/c.md", "/n/c.md"), Some("window-1"));
+        assert_eq!(file_holder(&held, "/n/a.md", "/n/a.md"), Some("main"));
+        assert_eq!(file_holder(&held, "/n/new.md", "/n/new.md"), None);
         // The receiving window itself is not "another window that has it".
-        assert_eq!(file_holder(&held, "/n/a.md", "/n/a.md", Some("main")), None);
     }
 
     #[test]
@@ -2218,11 +2200,11 @@ mod tests {
             ("window-2", &["/typed/b.md"]),
         ]);
         assert_eq!(
-            file_holder(&held, "c:/notes/a.md", "C:\\Notes\\A.md", None),
+            file_holder(&held, "c:/notes/a.md", "C:\\Notes\\A.md"),
             Some("window-1")
         );
         assert_eq!(
-            file_holder(&held, "/typed/b.md", "/real/b.md", None),
+            file_holder(&held, "/typed/b.md", "/real/b.md"),
             Some("window-2")
         );
     }
@@ -2257,13 +2239,13 @@ mod tests {
         assert_eq!(here, vec!["/n/new.md", "/n/main.md"]);
         assert_eq!(
             elsewhere,
-            vec![
+            BTreeMap::from([
                 (
                     "window-1".to_string(),
                     vec!["/n/a.md".to_string(), "/n/b.md".to_string()]
                 ),
                 ("window-2".to_string(), vec!["/n/c.md".to_string()]),
-            ]
+            ])
         );
     }
 
