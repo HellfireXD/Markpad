@@ -61,6 +61,10 @@ export default {
         restoreStateOnReopenHint: '恢复上次的窗口和标签页，文件内容从磁盘读取。',
         closeWindowWithLastTab: '关闭最后一个标签时关闭窗口',
         openFileMode: '打开已有文件时',
+        openFileTarget: '外部文件打开到',
+        openFileTargetHint: '只在打开了多个窗口时询问。在 Markpad 里打开的文件，总是在当前窗口打开。',
+        openFileTargetLastWindow: '最后使用的窗口',
+        openFileTargetAsk: '询问我',
         newFileDefaultMode: '新建文件在编辑器中打开',
         showRecentFiles: '显示最近文件',
         showFolderForDuplicateNames: '重名文件显示文件夹',
@@ -304,7 +308,11 @@ export default {
         youHaveUnsavedChanges: '"{title}"中有未保存的更改。关闭前要保存吗？',
         openExportedFileTitle: '打开导出的文件？',
         openExportedHtmlMessage: 'HTML 导出已保存。现在打开吗？',
-        openExportedPdfMessage: 'PDF 导出已保存。现在打开吗？'
+        openExportedPdfMessage: 'PDF 导出已保存。现在打开吗？',
+        openFileInTitle: '在哪个窗口打开…',
+        openFilesInTitle: '在哪个窗口打开 {{count}} 个文件…',
+        openFileInButton: '打开',
+        thisWindow: '当前窗口'
     },
     update: {
         checkingHeader: '正在检查更新…',

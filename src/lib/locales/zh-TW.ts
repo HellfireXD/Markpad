@@ -72,6 +72,10 @@ export default {
         restoreStateOnReopenHint: '還原上次的視窗和分頁，檔案內容從磁碟讀取。',
         closeWindowWithLastTab: '關閉最後一個分頁時關閉視窗',
         openFileMode: '開啟既有檔案時',
+        openFileTarget: '外部檔案開啟於',
+        openFileTargetHint: '只在開啟多個視窗時詢問。在 Markpad 裡開啟的檔案，一律在目前的視窗開啟。',
+        openFileTargetLastWindow: '最後使用的視窗',
+        openFileTargetAsk: '詢問我',
         newFileDefaultMode: '新建檔案以編輯器開啟',
         showRecentFiles: '顯示最近的檔案',
         showFolderForDuplicateNames: '重名檔案顯示資料夾',
@@ -304,7 +308,11 @@ export default {
         youHaveUnsavedChanges: '「{title}」有未儲存的變更，關閉前要儲存嗎？',
         openExportedFileTitle: '開啟匯出的檔案？',
         openExportedHtmlMessage: 'HTML 已匯出並儲存，現在要開啟嗎？',
-        openExportedPdfMessage: 'PDF 已匯出並儲存，現在要開啟嗎？'
+        openExportedPdfMessage: 'PDF 已匯出並儲存，現在要開啟嗎？',
+        openFileInTitle: '在哪個視窗開啟…',
+        openFilesInTitle: '在哪個視窗開啟 {{count}} 個檔案…',
+        openFileInButton: '開啟',
+        thisWindow: '目前的視窗'
     },
     update: {
         checkingHeader: '正在檢查更新…',

@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Obnovit okna při spuštění',
         restoreStateOnReopenHint: 'Znovu otevře poslední okna a karty. Obsah souborů se načte z disku.',
         closeWindowWithLastTab: 'Zavřít okno s poslední kartou',
+        openFileTarget: 'Kam otevírat externí soubory',
+        openFileTargetHint: 'Ptá se, jen když je otevřeno více oken. Soubory otevřené přímo v Markpadu se vždy otevřou tam, kde právě jste.',
+        openFileTargetLastWindow: 'Do posledního okna',
+        openFileTargetAsk: 'Zeptat se',
         newFileDefaultMode: 'Nový soubor se otevře v editoru',
         showRecentFiles: 'Zobrazit nedávné soubory',
         showFolderForDuplicateNames: 'Zobrazit složku u stejných názvů',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Neuložené změny',
         youHaveUnsavedChanges: 'Máte neuložené změny v "{title}". Chcete je uložit před zavřením?',
+        openFileInTitle: 'Otevřít soubor v…',
+        openFilesInTitle: 'Otevřít soubory ({{count}}) v…',
+        openFileInButton: 'Otevřít',
+        thisWindow: 'toto okno'
     },
     home: {
         welcomeToMarkpad: 'Vítejte v Markpadu',

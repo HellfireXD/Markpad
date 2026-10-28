@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Gjenopprett vinduer ved oppstart',
         restoreStateOnReopenHint: 'Åpner de siste vinduene og fanene dine igjen. Filinnholdet leses fra disken.',
         closeWindowWithLastTab: 'Lukk vinduet med den siste fanen',
+        openFileTarget: 'Åpne eksterne filer i',
+        openFileTargetHint: 'Spør bare når mer enn ett vindu er åpent. Filer du åpner fra Markpad, åpnes alltid der du er.',
+        openFileTargetLastWindow: 'Siste vindu',
+        openFileTargetAsk: 'Spør meg',
         newFileDefaultMode: 'Ny fil åbnes i editor',
         showRecentFiles: 'Vis nylige filer',
         showFolderForDuplicateNames: 'Vis mappe ved like filnavn',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Ulagrede endringer',
         youHaveUnsavedChanges: 'Du har ulagrede endringer i "{title}". Vil du lagre dem før lukking?',
+        openFileInTitle: 'Åpne fil i…',
+        openFilesInTitle: 'Åpne {{count}} filer i…',
+        openFileInButton: 'Åpne',
+        thisWindow: 'dette vinduet'
     },
     home: {
         welcomeToMarkpad: 'Velkommen til Markpad',

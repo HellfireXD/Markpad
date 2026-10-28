@@ -47,6 +47,10 @@ export default {
         restoreStateOnReopen: '시작할 때 창 복원',
         restoreStateOnReopenHint: '마지막으로 열었던 창과 탭을 다시 엽니다. 파일 내용은 디스크에서 읽습니다.',
         closeWindowWithLastTab: '마지막 탭을 닫으면 창 닫기',
+        openFileTarget: '외부 파일을 열 위치',
+        openFileTargetHint: '창이 두 개 이상 열려 있을 때만 묻습니다. Markpad 안에서 연 파일은 항상 지금 있는 창에서 열립니다.',
+        openFileTargetLastWindow: '마지막 창',
+        openFileTargetAsk: '매번 묻기',
         newFileDefaultMode: '새 파일을 편집기에서 열기',
         showRecentFiles: '최근 파일 표시',
         showFolderForDuplicateNames: '이름이 같은 파일에 폴더 표시',
@@ -255,7 +259,11 @@ export default {
         youHaveUnsavedChanges: '"{title}"에 저장되지 않은 변경 사항이 있습니다. 닫기 전에 저장하시겠습니까?',
         openExportedFileTitle: '내보낸 파일을 여시겠습니까?',
         openExportedHtmlMessage: 'HTML 내보내기가 저장되었습니다. 지금 여시겠습니까?',
-        openExportedPdfMessage: 'PDF 내보내기가 저장되었습니다. 지금 여시겠습니까?'
+        openExportedPdfMessage: 'PDF 내보내기가 저장되었습니다. 지금 여시겠습니까?',
+        openFileInTitle: '파일을 열 창…',
+        openFilesInTitle: '파일 {{count}}개를 열 창…',
+        openFileInButton: '열기',
+        thisWindow: '이 창'
     },
     update: {
         checkingHeader: '업데이트 확인 중…',

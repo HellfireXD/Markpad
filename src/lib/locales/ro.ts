@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Restaurează ferestrele la pornire',
         restoreStateOnReopenHint: 'Redeschide ultimele ferestre și file. Conținutul fișierelor este citit de pe disc.',
         closeWindowWithLastTab: 'Închide fereastra odată cu ultima filă',
+        openFileTarget: 'Deschide fișierele externe în',
+        openFileTargetHint: 'Întreabă doar când sunt deschise mai multe ferestre. Fișierele deschise din Markpad se deschid mereu acolo unde ești.',
+        openFileTargetLastWindow: 'Ultima fereastră',
+        openFileTargetAsk: 'Întreabă-mă',
         newFileDefaultMode: 'Fișier nou se deschide în editor',
         showRecentFiles: 'Afișare fișiere recente',
         showFolderForDuplicateNames: 'Afișează folderul pentru nume duplicate',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Modificări nesalvate',
         youHaveUnsavedChanges: 'Aveți modificări nesalvate în "{title}". Doriți să le salvați înainte de închidere?',
+        openFileInTitle: 'Deschide fișierul în…',
+        openFilesInTitle: 'Deschide {{count}} fișiere în…',
+        openFileInButton: 'Deschide',
+        thisWindow: 'această fereastră'
     },
     home: {
         welcomeToMarkpad: 'Bine ați venit la Markpad',

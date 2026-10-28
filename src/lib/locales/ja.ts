@@ -45,6 +45,10 @@ export default {
         restoreStateOnReopen: '起動時にウィンドウを復元',
         restoreStateOnReopenHint: '前回のウィンドウとタブを再び開きます。ファイルの内容はディスクから読み込みます。',
         closeWindowWithLastTab: '最後のタブを閉じたらウィンドウも閉じる',
+        openFileTarget: '外部ファイルを開く場所',
+        openFileTargetHint: 'ウィンドウが2つ以上開いているときだけ確認します。Markpad の中から開いたファイルは、常に今いるウィンドウで開きます。',
+        openFileTargetLastWindow: '最後のウィンドウ',
+        openFileTargetAsk: '毎回確認',
         newFileDefaultMode: '新しいファイルをエディタで開く',
         showRecentFiles: '最近のファイルを表示',
         showFolderForDuplicateNames: '同名ファイルにフォルダーを表示',
@@ -229,6 +233,10 @@ export default {
     modal: {
         unsavedChanges: '未保存の変更',
         youHaveUnsavedChanges: '"{title}"に未保存の変更があります。閉じる前に保存しますか？',
+        openFileInTitle: 'ファイルを開くウィンドウ…',
+        openFilesInTitle: '{{count}} 個のファイルを開くウィンドウ…',
+        openFileInButton: '開く',
+        thisWindow: 'このウィンドウ'
     },
     home: {
         welcomeToMarkpad: 'Markpadへようこそ',

@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Vensters herstellen bij starten',
         restoreStateOnReopenHint: 'Opent je laatste vensters en tabbladen opnieuw. Bestandsinhoud wordt van schijf gelezen.',
         closeWindowWithLastTab: 'Venster sluiten met het laatste tabblad',
+        openFileTarget: 'Externe bestanden openen in',
+        openFileTargetHint: 'Vraagt alleen als er meer dan één venster open is. Bestanden die je vanuit Markpad opent, openen altijd waar je bent.',
+        openFileTargetLastWindow: 'Laatste venster',
+        openFileTargetAsk: 'Vraag het mij',
         newFileDefaultMode: 'Nieuw bestand opent in editor',
         showRecentFiles: 'Toon recente bestanden',
         showFolderForDuplicateNames: 'Map tonen bij dubbele namen',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Niet-opgeslagen wijzigingen',
         youHaveUnsavedChanges: 'Je hebt niet-opgeslagen wijzigingen in "{title}". Wil je deze opslaan voordat je sluit?',
+        openFileInTitle: 'Bestand openen in…',
+        openFilesInTitle: '{{count}} bestanden openen in…',
+        openFileInButton: 'Openen',
+        thisWindow: 'dit venster'
     },
     home: {
         welcomeToMarkpad: 'Welkom bij Markpad',

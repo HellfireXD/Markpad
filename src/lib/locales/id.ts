@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Pulihkan Jendela saat Dimulai',
         restoreStateOnReopenHint: 'Membuka kembali jendela dan tab terakhir Anda. Isi file dibaca dari disk.',
         closeWindowWithLastTab: 'Tutup Jendela bersama Tab Terakhir',
+        openFileTarget: 'Buka File Eksternal di',
+        openFileTargetHint: 'Hanya bertanya jika lebih dari satu jendela terbuka. File yang Anda buka dari dalam Markpad selalu terbuka di tempat Anda berada.',
+        openFileTargetLastWindow: 'Jendela Terakhir',
+        openFileTargetAsk: 'Tanya Saya',
         newFileDefaultMode: 'File baru terbuka di editor',
         showRecentFiles: 'Tampilkan File Terbaru',
         showFolderForDuplicateNames: 'Tampilkan Folder untuk Nama Ganda',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Perubahan Belum Disimpan',
         youHaveUnsavedChanges: 'Anda memiliki perubahan yang belum disimpan di "{title}". Apakah Anda ingin menyimpannya sebelum menutup?',
+        openFileInTitle: 'Buka file di…',
+        openFilesInTitle: 'Buka {{count}} file di…',
+        openFileInButton: 'Buka',
+        thisWindow: 'jendela ini'
     },
     home: {
         welcomeToMarkpad: 'Selamat Datang di Markpad',

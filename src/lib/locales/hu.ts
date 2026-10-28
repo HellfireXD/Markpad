@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Ablakok visszaállítása indításkor',
         restoreStateOnReopenHint: 'Újra megnyitja a legutóbbi ablakokat és lapokat. A fájlok tartalma a lemezről töltődik be.',
         closeWindowWithLastTab: 'Ablak bezárása az utolsó lappal',
+        openFileTarget: 'Külső fájlok megnyitása',
+        openFileTargetHint: 'Csak akkor kérdez, ha egynél több ablak van nyitva. A Markpadon belül megnyitott fájlok mindig ott nyílnak meg, ahol éppen vagy.',
+        openFileTargetLastWindow: 'Az utolsó ablakban',
+        openFileTargetAsk: 'Kérdezzen rá',
         newFileDefaultMode: 'Új fájl megnyílik a szerkesztőben',
         showRecentFiles: 'Legutóbbi fájlok megjelenítése',
         showFolderForDuplicateNames: 'Mappa megjelenítése azonos neveknél',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Nem mentett módosítások',
         youHaveUnsavedChanges: 'Nem mentett módosításai vannak a(z) "{title}" fájlban. Menteni szeretné bezárás előtt?',
+        openFileInTitle: 'Fájl megnyitása itt…',
+        openFilesInTitle: '{{count}} fájl megnyitása itt…',
+        openFileInButton: 'Megnyitás',
+        thisWindow: 'ez az ablak'
     },
     home: {
         welcomeToMarkpad: 'Üdvözli a Markpad',

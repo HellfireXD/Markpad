@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Başlangıçta Pencereleri Geri Yükle',
         restoreStateOnReopenHint: 'Son pencerelerinizi ve sekmelerinizi yeniden açar. Dosya içerikleri diskten okunur.',
         closeWindowWithLastTab: 'Son sekmeyle birlikte pencereyi kapat',
+        openFileTarget: 'Harici Dosyaları Şurada Aç',
+        openFileTargetHint: 'Yalnızca birden fazla pencere açıkken sorar. Markpad içinden açtığınız dosyalar her zaman bulunduğunuz yerde açılır.',
+        openFileTargetLastWindow: 'Son Pencere',
+        openFileTargetAsk: 'Bana Sor',
         newFileDefaultMode: 'Yeni dosya editörde açılır',
         showRecentFiles: 'Son Dosyaları Göster',
         showFolderForDuplicateNames: 'Aynı adlı dosyalarda klasörü göster',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Kaydedilmemiş Değişiklikler',
         youHaveUnsavedChanges: '"{title}" içinde kaydedilmemiş değişiklikleriniz var. Kapatmadan önce kaydetmek istiyor musunuz?',
+        openFileInTitle: 'Dosyayı şurada aç…',
+        openFilesInTitle: '{{count}} dosyayı şurada aç…',
+        openFileInButton: 'Aç',
+        thisWindow: 'bu pencere'
     },
     home: {
         welcomeToMarkpad: 'Markpad\'e Hoş Geldiniz',

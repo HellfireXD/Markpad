@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Restaurar ventanas al iniciar',
         restoreStateOnReopenHint: 'Vuelve a abrir tus últimas ventanas y pestañas. El contenido de los archivos se lee del disco.',
         closeWindowWithLastTab: 'Cerrar la ventana con la última pestaña',
+        openFileTarget: 'Abrir archivos externos en',
+        openFileTargetHint: 'Solo pregunta cuando hay más de una ventana abierta. Los archivos que abres desde Markpad siempre se abren donde estás.',
+        openFileTargetLastWindow: 'Última ventana',
+        openFileTargetAsk: 'Preguntarme',
         newFileDefaultMode: 'Nuevo archivo se abre en el editor',
         showRecentFiles: 'Mostrar archivos recientes',
         showFolderForDuplicateNames: 'Mostrar carpeta en nombres duplicados',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Cambios sin guardar',
         youHaveUnsavedChanges: 'Tiene cambios sin guardar en "{title}". ¿Desea guardarlos antes de cerrar?',
+        openFileInTitle: 'Abrir archivo en…',
+        openFilesInTitle: 'Abrir {{count}} archivos en…',
+        openFileInButton: 'Abrir',
+        thisWindow: 'esta ventana'
     },
     home: {
         welcomeToMarkpad: 'Bienvenido a Markpad',

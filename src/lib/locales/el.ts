@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Επαναφορά παραθύρων κατά την εκκίνηση',
         restoreStateOnReopenHint: 'Ανοίγει ξανά τα τελευταία παράθυρα και τις καρτέλες σας. Το περιεχόμενο των αρχείων διαβάζεται από τον δίσκο.',
         closeWindowWithLastTab: 'Κλείσιμο παραθύρου με την τελευταία καρτέλα',
+        openFileTarget: 'Άνοιγμα εξωτερικών αρχείων σε',
+        openFileTargetHint: 'Ρωτά μόνο όταν είναι ανοιχτά περισσότερα από ένα παράθυρα. Τα αρχεία που ανοίγετε μέσα από το Markpad ανοίγουν πάντα εκεί που βρίσκεστε.',
+        openFileTargetLastWindow: 'Τελευταίο παράθυρο',
+        openFileTargetAsk: 'Ερώτηση κάθε φορά',
         newFileDefaultMode: 'Νέο αρχείο ανοίγει στον επεξεργαστή',
         showRecentFiles: 'Εμφάνιση πρόσφατων αρχείων',
         showFolderForDuplicateNames: 'Εμφάνιση φακέλου για διπλότυπα ονόματα',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Μη αποθηκευμένες αλλαγές',
         youHaveUnsavedChanges: 'Έχετε μη αποθηκευμένες αλλαγές στο "{title}". Θέλετε να τις αποθηκεύσετε πριν το κλείσιμο;',
+        openFileInTitle: 'Άνοιγμα αρχείου σε…',
+        openFilesInTitle: 'Άνοιγμα {{count}} αρχείων σε…',
+        openFileInButton: 'Άνοιγμα',
+        thisWindow: 'αυτό το παράθυρο'
     },
     home: {
         welcomeToMarkpad: 'Καλώς ήρθατε στο Markpad',

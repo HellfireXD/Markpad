@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Khôi phục cửa sổ khi khởi động',
         restoreStateOnReopenHint: 'Mở lại các cửa sổ và thẻ lần trước. Nội dung tệp được đọc từ ổ đĩa.',
         closeWindowWithLastTab: 'Đóng cửa sổ khi đóng thẻ cuối cùng',
+        openFileTarget: 'Mở tệp bên ngoài trong',
+        openFileTargetHint: 'Chỉ hỏi khi có nhiều hơn một cửa sổ đang mở. Tệp bạn mở từ bên trong Markpad luôn mở ở nơi bạn đang ở.',
+        openFileTargetLastWindow: 'Cửa sổ gần nhất',
+        openFileTargetAsk: 'Hỏi tôi',
         newFileDefaultMode: 'Tệp mới mở trong trình chỉnh sửa',
         showRecentFiles: 'Hiển thị tệp gần đây',
         showFolderForDuplicateNames: 'Hiện thư mục khi trùng tên',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Thay đổi chưa lưu',
         youHaveUnsavedChanges: 'Bạn có thay đổi chưa lưu trong "{title}". Bạn có muốn lưu trước khi đóng không?',
+        openFileInTitle: 'Mở tệp trong…',
+        openFilesInTitle: 'Mở {{count}} tệp trong…',
+        openFileInButton: 'Mở',
+        thisWindow: 'cửa sổ này'
     },
     home: {
         welcomeToMarkpad: 'Chào mừng đến với Markpad',

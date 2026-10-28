@@ -50,6 +50,10 @@ export default {
         restoreStateOnReopen: 'Восстанавливать окна при запуске',
         restoreStateOnReopenHint: 'Снова открывает последние окна и вкладки. Содержимое файлов читается с диска.',
         closeWindowWithLastTab: 'Закрывать окно вместе с последней вкладкой',
+        openFileTarget: 'Открывать внешние файлы в',
+        openFileTargetHint: 'Спрашивает, только если открыто больше одного окна. Файлы, открытые из самого Markpad, всегда открываются там, где вы находитесь.',
+        openFileTargetLastWindow: 'Последнее окно',
+        openFileTargetAsk: 'Спрашивать',
         newFileDefaultMode: 'Новый файл открывается в редакторе',
         showRecentFiles: 'Показывать недавние файлы',
         showFolderForDuplicateNames: 'Показывать папку для одинаковых имён',
@@ -229,6 +233,10 @@ export default {
     modal: {
         unsavedChanges: 'Несохранённые изменения',
         youHaveUnsavedChanges: 'У вас есть несохранённые изменения в "{title}". Вы хотите сохранить их перед закрытием?',
+        openFileInTitle: 'Открыть файл в…',
+        openFilesInTitle: 'Открыть файлы ({{count}}) в…',
+        openFileInButton: 'Открыть',
+        thisWindow: 'это окно'
     },
     home: {
         welcomeToMarkpad: 'Добро пожаловать в Markpad',

@@ -46,6 +46,10 @@ export default {
         restoreStateOnReopen: 'Przywracaj okna przy uruchomieniu',
         restoreStateOnReopenHint: 'Ponownie otwiera ostatnie okna i karty. Zawartość plików jest wczytywana z dysku.',
         closeWindowWithLastTab: 'Zamknij okno razem z ostatnią kartą',
+        openFileTarget: 'Otwieraj pliki zewnętrzne w',
+        openFileTargetHint: 'Pyta tylko wtedy, gdy otwarte jest więcej niż jedno okno. Pliki otwierane z poziomu Markpada zawsze otwierają się tam, gdzie jesteś.',
+        openFileTargetLastWindow: 'Ostatnie okno',
+        openFileTargetAsk: 'Pytaj za każdym razem',
         newFileDefaultMode: 'Nowy plik otwiera się w edytorze',
         showRecentFiles: 'Pokaż ostatnie pliki',
         showFolderForDuplicateNames: 'Pokaż folder przy powtarzających się nazwach',
@@ -237,7 +241,11 @@ export default {
         youHaveUnsavedChanges: 'Masz niezapisane zmiany w "{title}". Czy chcesz je zapisać przed zamknięciem?',
         openExportedFileTitle: 'Otworzyć wyeksportowany plik?',
         openExportedHtmlMessage: 'Eksport HTML został zapisany. Otworzyć go teraz?',
-        openExportedPdfMessage: 'Eksport PDF został zapisany. Otworzyć go teraz?'
+        openExportedPdfMessage: 'Eksport PDF został zapisany. Otworzyć go teraz?',
+        openFileInTitle: 'Otwórz plik w…',
+        openFilesInTitle: 'Otwórz pliki ({{count}}) w…',
+        openFileInButton: 'Otwórz',
+        thisWindow: 'to okno'
     },
     home: {
         welcomeToMarkpad: 'Witaj w Markpad',

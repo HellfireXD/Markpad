@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Restaurer les fenêtres au lancement',
         restoreStateOnReopenHint: 'Rouvre vos dernières fenêtres et onglets. Le contenu des fichiers est relu depuis le disque.',
         closeWindowWithLastTab: 'Fermer la fenêtre avec le dernier onglet',
+        openFileTarget: 'Ouvrir les fichiers externes dans',
+        openFileTargetHint: 'Ne demande que si plusieurs fenêtres sont ouvertes. Les fichiers ouverts depuis Markpad s\'ouvrent toujours là où vous êtes.',
+        openFileTargetLastWindow: 'La dernière fenêtre',
+        openFileTargetAsk: 'Me demander',
         newFileDefaultMode: 'Nouveau fichier s\'ouvre dans l\'éditeur',
         showRecentFiles: 'Afficher les fichiers récents',
         showFolderForDuplicateNames: 'Afficher le dossier pour les noms identiques',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Modifications non enregistrées',
         youHaveUnsavedChanges: 'Vous avez des modifications non enregistrées dans "{title}". Voulez-vous les enregistrer avant de fermer ?',
+        openFileInTitle: 'Ouvrir le fichier dans…',
+        openFilesInTitle: 'Ouvrir {{count}} fichiers dans…',
+        openFileInButton: 'Ouvrir',
+        thisWindow: 'cette fenêtre'
     },
     home: {
         welcomeToMarkpad: 'Bienvenue dans Markpad',

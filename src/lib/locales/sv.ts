@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Återställ fönster vid start',
         restoreStateOnReopenHint: 'Öppnar dina senaste fönster och flikar igen. Filernas innehåll läses från disken.',
         closeWindowWithLastTab: 'Stäng fönstret med sista fliken',
+        openFileTarget: 'Öppna externa filer i',
+        openFileTargetHint: 'Frågar bara när mer än ett fönster är öppet. Filer du öppnar inifrån Markpad öppnas alltid där du är.',
+        openFileTargetLastWindow: 'Senaste fönstret',
+        openFileTargetAsk: 'Fråga mig',
         newFileDefaultMode: 'Ny fil öppnas i redigeraren',
         showRecentFiles: 'Visa senaste filer',
         showFolderForDuplicateNames: 'Visa mapp vid dubbletter av namn',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Osparade ändringar',
         youHaveUnsavedChanges: 'Du har osparade ändringar i "{title}". Vill du spara dem innan du stänger?',
+        openFileInTitle: 'Öppna fil i…',
+        openFilesInTitle: 'Öppna {{count}} filer i…',
+        openFileInButton: 'Öppna',
+        thisWindow: 'det här fönstret'
     },
     home: {
         welcomeToMarkpad: 'Välkommen till Markpad',

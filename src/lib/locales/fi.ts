@@ -44,6 +44,10 @@ export default {
         restoreStateOnReopen: 'Palauta ikkunat käynnistettäessä',
         restoreStateOnReopenHint: 'Avaa viimeisimmät ikkunat ja välilehdet uudelleen. Tiedostojen sisältö luetaan levyltä.',
         closeWindowWithLastTab: 'Sulje ikkuna viimeisen välilehden mukana',
+        openFileTarget: 'Ulkoiset tiedostot avataan',
+        openFileTargetHint: 'Kysyy vain, kun auki on useampi kuin yksi ikkuna. Markpadin sisältä avaamasi tiedostot avautuvat aina siihen ikkunaan, jossa olet.',
+        openFileTargetLastWindow: 'Viimeisimpään ikkunaan',
+        openFileTargetAsk: 'Kysy minulta',
         newFileDefaultMode: 'Uusi tiedosto avautuu editorissa',
         showRecentFiles: 'Näytä viimeisimmät tiedostot',
         showFolderForDuplicateNames: 'Näytä kansio samannimisille tiedostoille',
@@ -224,6 +228,10 @@ export default {
     modal: {
         unsavedChanges: 'Tallentamattomia muutoksia',
         youHaveUnsavedChanges: 'Tiedostossa "{title}" on tallentamattomia muutoksia. Haluatko tallentaa ne ennen sulkemista?',
+        openFileInTitle: 'Avaa tiedosto ikkunaan…',
+        openFilesInTitle: 'Avaa {{count}} tiedostoa ikkunaan…',
+        openFileInButton: 'Avaa',
+        thisWindow: 'tämä ikkuna'
     },
     home: {
         welcomeToMarkpad: 'Tervetuloa Markpadiin',
